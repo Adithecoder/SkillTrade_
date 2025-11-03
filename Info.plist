@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Kerek.ttf</string>
+		<string>Lexend-Medium.ttf</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIImageName</key>
+		<string></string>
+	</dict>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Az alkalmazás szükséges a pontos helymeghatározáshoz a szolgáltatások közelében történő kereséshez.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Az alkalmazás szükséges a pontos helymeghatározáshoz a szolgáltatások közelében történő kereséshez.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>A QR kódok szkenneléséhez szükségünk van a kamerára.</string>
+</dict>
+</plist>

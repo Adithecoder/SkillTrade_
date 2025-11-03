@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkillTrade Works Teszt</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .work-card { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 8px; }
+        .work-title { font-size: 18px; font-weight: bold; color: #333; }
+        .work-details { color: #666; margin: 5px 0; }
+        .refresh-btn { 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            padding: 10px 15px; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            margin-bottom: 20px;
+        }
+        .refresh-btn:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SkillTrade Munkák</h1>
+        <button class="refresh-btn" onclick="loadWorks()">Frissítés</button>
+        <div id="works-container"></div>
+    </div>
+
+    <script>
+        async function loadWorks() {
+            try {
+                const response = await fetch('http://localhost:3000/api/works');
+                const data = await response.json();
+                
+                const container = document.getElementById('works-container');
+                
+                if (data.works && data.works.length > 0) {
+                    container.innerHTML = data.works.map(work => `
+                        <div class="work-card">
+                            <div class="work-title">${work.title}</div>
+                            <div class="work-details">Munkáltató: ${work.employerName}</div>
+                            <div class="work-details">Bér: ${work.wage} Ft</div>
+                            <div class="work-details">Fizetési mód: ${work.paymentType}</div>
+                            <div class="work-details">Státusz: ${work.statusText}</div>
+                            <div class="work-details">Létrehozva: ${new Date(work.createdAt).toLocaleString()}</div>
+                            ${work.location ? `<div class="work-details">Hely: ${work.location}</div>` : ''}
+                            ${work.description ? `<div class="work-details">Leírás: ${work.description}</div>` : ''}
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = '<p>Nincsenek munkák.</p>';
+                }
+            } catch (error) {
+                console.error('Hiba:', error);
+                document.getElementById('works-container').innerHTML = '<p>Hiba a munkák betöltése során.</p>';
+            }
+        }
+
+        // Betöltés oldal megnyitásakor
+        document.addEventListener('DOMContentLoaded', loadWorks);
+    </script>
+</body>
+</html>
