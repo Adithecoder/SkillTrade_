@@ -1,21 +1,18 @@
-//
-//  ContentView.swift
-//  SkillTrade
-//
-//  Created by Czeglédi Ádi on 10/25/25.
-//
-
-// 2024 SkillTrade. Minden jog fenntartva. (All Rights Reserved)
+// ContentView.swift
 import SwiftUI
 
 struct ContentView: View {
     @State private var selectedTab = 0
     @StateObject private var userManager = UserManager.shared
     @StateObject private var serverAuth = ServerAuthManager.shared
+    @State private var isLoading = true
     
     var body: some View {
         Group {
-            if userManager.isAuthenticated || serverAuth.isAuthenticated {
+            if isLoading {
+                // LoadingView2 használata betöltés közben
+                LoadingView2()
+            } else if userManager.isAuthenticated || serverAuth.isAuthenticated {
                 // Fő alkalmazás nézet TabView-val
                 TabView(selection: $selectedTab) {
                     // Search tab
@@ -37,10 +34,44 @@ struct ContentView: View {
             } else {
                 // Bejelentkezési nézet
                 LoginView()
-//                SearchView2(initialSearchText: "")
             }
         }
         .environmentObject(UserManager.shared)
+        .onAppear {
+            checkAuthenticationStatus()
+        }
+    }
+    
+    private func checkAuthenticationStatus() {
+        print("🔐 CONTENTVIEW - Checking authentication status")
+        
+        // First check local authentication status
+        if userManager.isAuthenticated {
+            print("✅ CONTENTVIEW - UserManager shows authenticated")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                isLoading = false
+            }
+            return
+        }
+        
+        // Check server authentication with auto-login
+        serverAuth.autoLogin { success in
+            DispatchQueue.main.async {
+                if success {
+                    print("✅ CONTENTVIEW - Auto-login successful")
+                    self.userManager.isAuthenticated = true
+                } else {
+                    print("❌ CONTENTVIEW - Auto-login failed, showing login screen")
+                    self.userManager.isAuthenticated = false
+                    self.serverAuth.isAuthenticated = false
+                }
+                
+                // Rövid késleltetés, hogy látható legyen a betöltőképernyő
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    isLoading = false
+                }
+            }
+        }
     }
 }
 

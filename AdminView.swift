@@ -18,6 +18,13 @@ struct AdminView: View {
     @State private var searchText = ""
     @State private var refreshID = UUID()
     
+    
+    @State private var showingEditUser = false
+    @State private var showingDeleteAlert = false
+    @State private var showingSuspendAlert = false
+    @State private var selectedUserForEdit: User?
+    @State private var selectedUserForAction: User?
+    @State private var navigationPath = NavigationPath()
     // Statisztikák
     @State private var totalUsers = 0
     @State private var verifiedUsers = 0
@@ -69,6 +76,16 @@ struct AdminView: View {
                         .foregroundColor(.DesignSystem.fokekszin)
                 }
                 .disabled(isLoading)
+                
+                Button(action: {
+                    testToken()
+                }) {
+                    Image(systemName: "key")
+                        .font(.system(size: 18))
+                        .foregroundColor(.blue)
+                }
+            
+            
             }
             .padding(.horizontal)
             
@@ -78,7 +95,17 @@ struct AdminView: View {
         .padding(.vertical)
         .background(Color.white)
     }
-    
+    private func testToken() {
+        print("🔐 TOKEN TEST")
+        print("🔐 UserDefaults authToken: \(UserDefaults.standard.string(forKey: "authToken") != nil ? "EXISTS" : "MISSING")")
+        print("🔐 UserDefaults userId: \(UserDefaults.standard.string(forKey: "userId") ?? "MISSING")")
+        print("🔐 UserDefaults isLoggedIn: \(UserDefaults.standard.bool(forKey: "isLoggedIn"))")
+        
+        if let token = UserDefaults.standard.string(forKey: "authToken") {
+            print("🔐 Token length: \(token.count)")
+            print("🔐 Token prefix: \(token.prefix(20))...")
+        }
+    }
     // MARK: - Stats Grid
     private var statsGridSection: some View {
         HStack(spacing: 12) {
@@ -111,6 +138,7 @@ struct AdminView: View {
         Picker("Válassz nézetet", selection: $selectedTab) {
             Text("Összes").tag(0)
             Text("Hitelesítés").tag(1)
+            Text("Felhasználók").tag(2)  // Új tab
             Text("Statisztikák").tag(2)
         }
         .pickerStyle(SegmentedPickerStyle())
@@ -132,6 +160,8 @@ struct AdminView: View {
                 case 1:
                     verificationView
                 case 2:
+                    userManagementView
+                case 3:
                     statisticsView
                 default:
                     allUsersView
@@ -197,6 +227,73 @@ struct AdminView: View {
             }
         }
         .listStyle(GroupedListStyle())
+    }
+    // MARK: - User Management View
+    // MARK: - User Management View (NavigationLink verzió)
+    private var userManagementView: some View {
+        List {
+            Section {
+                ForEach(serverUsers) { user in
+                    NavigationLink(destination: AdminUserEditView(
+                        user: user,
+                        onUserUpdated: { updatedUser in
+                            // Frissítsd a lokális listát
+                            if let index = serverUsers.firstIndex(where: { $0.id == updatedUser.id }) {
+                                serverUsers[index] = updatedUser
+                                calculateStats()
+                                refreshID = UUID()
+                            }
+                        }
+                    )) {
+                        UserManagementRow(
+                            user: user,
+                            onSuspend: { suspendUser(user) },
+                            onDelete: { deleteUser(user) }
+                        )
+                    }
+                }
+            } header: {
+                Text("Összes felhasználó (\(serverUsers.count))")
+                    .font(.custom("Jellee", size: 16))
+                    .foregroundColor(.primary)
+            }
+        }
+        .listStyle(GroupedListStyle())
+        .alert("Megerősítés szükséges", isPresented: $showingDeleteAlert) {
+            if let userToDelete = selectedUserForAction {
+                Button("Törlés", role: .destructive) {
+                    confirmDeleteUser(userToDelete)
+                }
+                Button("Mégse", role: .cancel) {}
+            }
+        } message: {
+            if let user = selectedUserForAction {
+                Text("Biztosan törölni szeretnéd \(user.name) fiókját? Ez a művelet nem visszavonható!")
+            }
+        }
+        .alert("Felfüggesztés", isPresented: $showingSuspendAlert) {
+            if let userToSuspend = selectedUserForAction {
+                if userToSuspend.status == .suspended {
+                    Button("Aktiválás") {
+                        confirmSuspendUser(userToSuspend, suspended: false)
+                    }
+                    Button("Mégse", role: .cancel) {}
+                } else {
+                    Button("Felfüggesztés", role: .destructive) {
+                        confirmSuspendUser(userToSuspend, suspended: true)
+                    }
+                    Button("Mégse", role: .cancel) {}
+                }
+            }
+        } message: {
+            if let user = selectedUserForAction {
+                if user.status == .suspended {
+                    Text("Aktiválod \(user.name) fiókját?")
+                } else {
+                    Text("Felfüggeszted \(user.name) fiókját?")
+                }
+            }
+        }
     }
     
     // MARK: - Statistics View
@@ -345,6 +442,7 @@ struct AdminView: View {
     }
     
     // MARK: - API Methods
+    // AdminView.swift - Részletes header debug
     private func loadAllUsersFromServer() {
         isLoading = true
         errorMessage = nil
@@ -352,8 +450,111 @@ struct AdminView: View {
         guard let token = UserDefaults.standard.string(forKey: "authToken") else {
             errorMessage = "Nincs érvényes token. Jelentkezz be újra."
             isLoading = false
+            print("❌ ADMIN - No token found in UserDefaults")
             return
         }
+        
+        print("🔐 ADMIN - Token found: \(token.prefix(20))...")
+        
+        let url = URL(string: "\(serverAuth.baseURL)/auth/users")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        // Részletes debug
+        print("👥 ADMIN - ===== REQUEST DEBUG =====")
+        print("👥 ADMIN - URL: \(url.absoluteString)")
+        print("👥 ADMIN - Method: GET")
+        print("👥 ADMIN - Headers: \(request.allHTTPHeaderFields ?? [:])")
+        print("👥 ADMIN - ==========================")
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                
+                if let error = error {
+                    print("❌ ADMIN - Network error: \(error)")
+                    self.errorMessage = "Hálózati hiba: \(error.localizedDescription)"
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    print("❌ ADMIN - Invalid response")
+                    self.errorMessage = "Érvénytelen válasz"
+                    return
+                }
+                
+                print("📡 ADMIN - Response status: \(httpResponse.statusCode)")
+                print("📡 ADMIN - Response headers: \(httpResponse.allHeaderFields)")
+                
+                guard let data = data else {
+                    self.errorMessage = "Nincs válasz adat"
+                    return
+                }
+                
+                // Debug: nézzük meg a nyers választ
+                if let responseString = String(data: data, encoding: .utf8) {
+                    print("📥 ADMIN - Raw server response: \(responseString.prefix(500))...") // Csak az első 500 karakter
+                }
+                
+                // Ellenőrizzük a status code-ot
+                if httpResponse.statusCode == 401 {
+                    self.errorMessage = "Hozzáférés megtagadva. Token érvénytelen vagy lejárt."
+                    return
+                } else if httpResponse.statusCode == 403 {
+                    self.errorMessage = "Nincs admin jogosultságod."
+                    return
+                } else if httpResponse.statusCode != 200 {
+                    self.errorMessage = "Szerver hiba: \(httpResponse.statusCode)"
+                    return
+                }
+                
+                do {
+                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        print("✅ ADMIN - JSON structure: \(json.keys)")
+                        
+                        if let usersArray = json["users"] as? [[String: Any]] {
+                            print("✅ ADMIN - \(usersArray.count) users found")
+                            
+                            var parsedUsers: [User] = []
+                            for userDict in usersArray {
+                                print("👤 ADMIN - User data: \(userDict)")
+                                if let user = self.parseSimpleUser(userDict) {
+                                    parsedUsers.append(user)
+                                }
+                            }
+                            
+                            self.serverUsers = parsedUsers
+                            self.calculateStats()
+                            self.refreshID = UUID()
+                            
+                            print("✅ ADMIN - \(parsedUsers.count) users loaded successfully")
+                        } else {
+                            self.errorMessage = "Hibás válasz formátum - nincs 'users' mező"
+                        }
+                    }
+                } catch {
+                    print("❌ ADMIN - JSON parse error: \(error)")
+                    self.errorMessage = "Hiba az adatok feldolgozásában: \(error.localizedDescription)"
+                }
+            }
+        }.resume()
+    }
+    
+    
+    private func continueLoadingUsers() {
+        guard let token = UserDefaults.standard.string(forKey: "authToken") else {
+               errorMessage = "Nincs érvényes token. Jelentkezz be újra."
+               isLoading = false
+               print("❌ ADMIN - No token found in UserDefaults")
+               
+               // Debug: nézzük meg, mi van a UserDefaults-ban
+               let allKeys = UserDefaults.standard.dictionaryRepresentation().keys
+               print("🔍 USERDEFAULTS KEYS: \(allKeys.filter { $0.contains("auth") || $0.contains("token") || $0.contains("user") })")
+               return
+           }
+        
+        print("🔐 ADMIN - Token found: \(token.prefix(20))...")
 
         let url = URL(string: "\(serverAuth.baseURL)/auth/users")!
         var request = URLRequest(url: url)
@@ -512,6 +713,102 @@ struct AdminView: View {
         }
     }
     
+    // MARK: - User Management Methods
+    private func showEditUser(_ user: User) {
+        selectedUserForEdit = user
+        showingEditUser = true
+    }
+
+    private func suspendUser(_ user: User) {
+        selectedUserForAction = user
+        showingSuspendAlert = true
+    }
+
+    private func deleteUser(_ user: User) {
+        selectedUserForAction = user
+        showingDeleteAlert = true
+    }
+
+    private func confirmSuspendUser(_ user: User, suspended: Bool) {
+        isLoading = true
+        
+        serverAuth.suspendUser(userId: user.id, suspended: suspended) { success in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                
+                if success {
+                    // Lokális frissítés
+                    if let index = self.serverUsers.firstIndex(where: { $0.id == user.id }) {
+                        var updatedUser = user
+                        updatedUser.status = suspended ? .suspended : .active
+                        self.serverUsers[index] = updatedUser
+                        self.calculateStats()
+                        self.refreshID = UUID()
+                        
+                        print("✅ \(user.name) státusza frissítve: \(suspended ? "felfüggesztve" : "aktiválva")")
+                    }
+                } else {
+                    self.errorMessage = "Nem sikerült frissíteni a felhasználó státuszát"
+                }
+            }
+        }
+    }
+
+    // AdminView.swift - Javított törlés
+    private func confirmDeleteUser(_ user: User) {
+        isLoading = true
+        
+        // Használd az email alapú törlést
+        serverAuth.deleteUserByEmail(userEmail: user.email) { success in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                
+                if success {
+                    // Lokális eltávolítás
+                    self.serverUsers.removeAll { $0.id == user.id }
+                    self.calculateStats()
+                    self.refreshID = UUID()
+                    
+                    print("✅ \(user.name) fiókja törölve (email: \(user.email))")
+                } else {
+                    self.errorMessage = "Nem sikerült törölni a felhasználót"
+                }
+            }
+        }
+    }
+
+    private func updateUserData(_ user: User) {
+        isLoading = true
+        
+        let updates: [String: Any] = [
+            "name": user.name,
+            "email": user.email,
+            "username": user.username,
+            "age": user.age ?? 0,
+            "userRole": user.userRole.rawValue,
+            "isVerified": user.isVerified
+        ]
+        
+        serverAuth.updateUser(userId: user.id, updates: updates) { success, updatedUser in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                
+                if success, let updatedUser = updatedUser {
+                    // Lokális frissítés
+                    if let index = self.serverUsers.firstIndex(where: { $0.id == user.id }) {
+                        self.serverUsers[index] = updatedUser
+                        self.calculateStats()
+                        self.refreshID = UUID()
+                        
+                        print("✅ \(user.name) adatai frissítve")
+                    }
+                } else {
+                    self.errorMessage = "Nem sikerült frissíteni a felhasználó adatait"
+                }
+            }
+        }
+    }
+    
     // MARK: - Helper Methods
     private func calculateStats() {
         totalUsers = serverUsers.count
@@ -594,7 +891,410 @@ struct AdminView: View {
         return formatter.date(from: dateString) ?? formatter.date(from: dateString.replacingOccurrences(of: "\\.\\d+", with: "", options: .regularExpression))
     }
 }
+struct UserManagementRow: View {
+    let user: User
+    let onSuspend: () -> Void
+    let onDelete: () -> Void
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            // Profil ikon
+            Circle()
+                .fill(statusColor.opacity(0.2))
+                .frame(width: 40, height: 40)
+                .overlay(
+                    Image(systemName: statusIcon)
+                        .foregroundColor(statusColor)
+                        .font(.system(size: 16))
+                )
+            
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(user.name)
+                        .font(.custom("Lexend", size: 16))
+                        .bold()
+                    
+                    if user.isVerified {
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundColor(.blue)
+                            .font(.system(size: 12))
+                    }
+                }
+                
+                HStack(spacing: 8) {
+                    Text(user.userRole == .admin ? "Admin" :
+                         user.userRole == .serviceProvider ? "Szolgáltató" : "Ügyfél")
+                        .font(.custom("Lexend", size: 11))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(roleColor.opacity(0.2))
+                        .foregroundColor(roleColor)
+                        .cornerRadius(4)
+                    
+                    Text(statusText)
+                        .font(.custom("Lexend", size: 11))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(statusColor.opacity(0.2))
+                        .foregroundColor(statusColor)
+                        .cornerRadius(4)
+                    
+                    if let age = user.age {
+                        Text("\(age) év")
+                            .font(.custom("Lexend", size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Text(user.email)
+                    .font(.custom("Lexend", size: 12))
+                    .foregroundColor(.secondary)
+                
+                Text("@\(user.username)")
+                    .font(.custom("Lexend", size: 11))
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            // Művelet gombok
+            HStack(spacing: 12) {
+//                Button(action: onEdit) {
+//                    VStack {
+//                        Image(systemName: //"pencil.circle.fill")
+//                            .font(.system(size: 20))
+//                            .foregroundColor(.blue)
+//                        Text("Szerkesztés")
+//                            .font(.custom("Lexend", size: //10))
+//                            .foregroundColor(.blue)
+//                    }
+//                }
+//                .buttonStyle(BorderlessButtonStyle())
+                
+                Button(action: onSuspend) {
+                    VStack {
+                        Image(systemName: user.status == .suspended ? "play.circle.fill" : "pause.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(user.status == .suspended ? .green : .orange)
+                        Text(user.status == .suspended ? "Aktiválás" : "Felfüggesztés")
+                            .font(.custom("Lexend", size: 10))
+                            .foregroundColor(user.status == .suspended ? .green : .orange)
+                    }
+                }
+                .buttonStyle(BorderlessButtonStyle())
+                
+                Button(action: onDelete) {
+                    VStack {
+                        Image(systemName: "trash.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(.red)
+                        Text("Törlés")
+                            .font(.custom("Lexend", size: 10))
+                            .foregroundColor(.red)
+                    }
+                }
+                .buttonStyle(BorderlessButtonStyle())
+            }
+        }
+        .padding(.vertical, 8)
+    }
+    
+    private var roleColor: Color {
+        switch user.userRole {
+        case .admin: return .red
+        case .serviceProvider: return .green
+        case .client: return .blue
+        }
+    }
+    
+    private var statusColor: Color {
+        switch user.status {
+        case .active: return .green
+        case .suspended: return .red
+        case .pending: return .orange
+        case .deleted:
+            return.indigo
+        }
+    }
+    
+    private var statusIcon: String {
+        switch user.status {
+        case .active: return "person.circle.fill"
+        case .suspended: return "person.crop.circle.badge.xmark"
+        case .pending: return "person.crop.circle.badge.clock"
+        case .deleted:
+            return "trash.circle"
+        }
+    }
+    
+    private var statusText: String {
+        switch user.status {
+        case .active: return "Aktív"
+        case .suspended: return "Felfüggesztve"
+        case .pending: return "Függőben"
+        case .deleted:
+            return "Törölve"
+        }
+    }
+}
 
+
+import SwiftUI
+
+struct AdminUserEditView: View {
+    @Environment(\.presentationMode) var presentationMode
+    @StateObject private var serverAuth = ServerAuthManager.shared
+    
+    let user: User
+    var onUserUpdated: ((User) -> Void)?
+    
+    @State private var editedName: String
+    @State private var editedEmail: String
+    @State private var editedUsername: String
+    @State private var editedAge: Int
+    @State private var editedUserRole: UserRole
+    @State private var editedIsVerified: Bool
+    @State private var editedStatus: UserStatus
+    
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var showSuccessAlert = false
+    @State private var showDeleteConfirmation = false
+    
+    init(user: User, onUserUpdated: ((User) -> Void)? = nil) {
+        self.user = user
+        self.onUserUpdated = onUserUpdated
+        
+        _editedName = State(initialValue: user.name)
+        _editedEmail = State(initialValue: user.email)
+        _editedUsername = State(initialValue: user.username)
+        _editedAge = State(initialValue: user.age ?? 0)
+        _editedUserRole = State(initialValue: user.userRole)
+        _editedIsVerified = State(initialValue: user.isVerified)
+        _editedStatus = State(initialValue: user.status)
+    }
+    
+    var body: some View {
+        NavigationView {
+            Form {
+                if isLoading {
+                    Section {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .scaleEffect(1.2)
+                            Text("Frissítés...")
+                                .font(.custom("Lexend", size: 14))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                    }
+                }
+                
+                if let errorMessage = errorMessage {
+                    Section {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundColor(.orange)
+                            Text(errorMessage)
+                                .font(.custom("Lexend", size: 14))
+                                .foregroundColor(.red)
+                        }
+                    }
+                }
+                
+                Section(header: Text("Alap információk")) {
+                    TextField("Név", text: $editedName)
+                        .font(.custom("Lexend", size: 16))
+                    
+                    TextField("Email", text: $editedEmail)
+                        .font(.custom("Lexend", size: 16))
+                        .keyboardType(.emailAddress)
+                        .autocapitalization(.none)
+                    
+                    TextField("Felhasználónév", text: $editedUsername)
+                        .font(.custom("Lexend", size: 16))
+                        .autocapitalization(.none)
+                    
+                    Stepper("Életkor: \(editedAge)", value: $editedAge, in: 16...100)
+                        .font(.custom("Lexend", size: 16))
+                }
+                
+                Section(header: Text("Jogosultságok és státusz")) {
+                    Picker("Felhasználói szerepkör", selection: $editedUserRole) {
+                        Text("Ügyfél").tag(UserRole.client)
+                        Text("Szolgáltató").tag(UserRole.serviceProvider)
+                        Text("Admin").tag(UserRole.admin)
+                    }
+                    .font(.custom("Lexend", size: 16))
+                    .pickerStyle(SegmentedPickerStyle())
+                    
+                    Picker("Fiók státusza", selection: $editedStatus) {
+                        Text("Aktív").tag(UserStatus.active)
+                        Text("Felfüggesztve").tag(UserStatus.suspended)
+                        Text("Függőben").tag(UserStatus.pending)
+                    }
+                    .font(.custom("Lexend", size: 16))
+                    .pickerStyle(SegmentedPickerStyle())
+                    
+                    Toggle("Hitelesített felhasználó", isOn: $editedIsVerified)
+                        .font(.custom("Lexend", size: 16))
+                }
+                
+                Section(header: Text("Jelenlegi információk")) {
+                    InfoRowAdmin(title: "Felhasználó ID", value: user.id.uuidString.prefix(8) + "...")
+                    InfoRowAdmin(title: "Regisztrálva", value: formatDate(user.createdAt))
+                    InfoRowAdmin(title: "Utolsó módosítás", value: formatDate(user.updatedAt))
+                    InfoRowAdmin(title: "XP pontok", value: "\(user.xp)")
+                }
+                
+                Section(header: Text("Veszélyes műveletek")) {
+                    Button(role: .destructive) {
+                        showDeleteConfirmation = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "trash")
+                            Text("Felhasználó törlése")
+                        }
+                    }
+                    .font(.custom("Lexend", size: 16))
+                }
+            }
+            .navigationTitle("Felhasználó szerkesztése")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Mégse") {
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                    .font(.custom("Lexend", size: 16))
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Mentés") {
+                        saveChanges()
+                    }
+                    .font(.custom("Lexend", size: 16))
+                    .bold()
+                    .disabled(isLoading)
+                }
+            }
+            .alert("Sikeres mentés", isPresented: $showSuccessAlert) {
+                Button("OK") {
+                    presentationMode.wrappedValue.dismiss()
+                }
+            } message: {
+                Text("A felhasználó adatai sikeresen frissítve.")
+            }
+            .alert("Felhasználó törlése", isPresented: $showDeleteConfirmation) {
+                Button("Törlés", role: .destructive) {
+                    deleteUser()
+                }
+                Button("Mégse", role: .cancel) {}
+            } message: {
+                Text("Biztosan törölni szeretnéd \(user.name) fiókját? Ez a művelet nem visszavonható!")
+            }
+        }
+    }
+    
+    private func saveChanges() {
+        isLoading = true
+        errorMessage = nil
+        
+        let updates: [String: Any] = [
+            "name": editedName,
+            "email": editedEmail,
+            "username": editedUsername,
+            "age": editedAge,
+            "userRole": editedUserRole.rawValue,
+            "isVerified": editedIsVerified,
+            "status": editedStatus.rawValue
+        ]
+        
+        serverAuth.updateUser(userId: user.id, updates: updates) { success, updatedUser in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                
+                if success, let updatedUser = updatedUser {
+                    self.showSuccessAlert = true
+                    self.onUserUpdated?(updatedUser)
+                    print("✅ \(user.name) adatai frissítve")
+                } else {
+                    self.errorMessage = "Nem sikerült frissíteni a felhasználó adatait"
+                }
+            }
+        }
+    }
+    
+    private func deleteUser() {
+        isLoading = true
+        errorMessage = nil
+        
+        serverAuth.deleteUser(userId: user.id) { success in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                
+                if success {
+                    self.presentationMode.wrappedValue.dismiss()
+                    print("✅ \(self.user.name) fiókja törölve")
+                } else {
+                    self.errorMessage = "Nem sikerült törölni a felhasználót"
+                }
+            }
+        }
+    }
+    
+    private func formatDate(_ date: Date?) -> String {
+        guard let date = date else { return "Ismeretlen" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy.MM.dd. HH:mm"
+        return formatter.string(from: date)
+    }
+}
+
+struct InfoRowAdmin: View {
+    let title: String
+    let value: String
+    
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.custom("Lexend", size: 14))
+                .foregroundColor(.primary)
+            Spacer()
+            Text(value)
+                .font(.custom("Lexend", size: 14))
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+#Preview {
+    AdminUserEditView(
+        user: User(
+            id: UUID(),
+            name: "Teszt Felhasználó",
+            email: "teszt@example.com",
+            username: "tesztuser",
+            bio: "",
+            rating: 4.5,
+            reviews: [],
+            location: Location(city: "Budapest", country: "Magyarország"),
+            skills: [],
+            pricing: [],
+            isVerified: true,
+            servicesOffered: "",
+            servicesAdvertised: "",
+            userRole: .client,
+            status: .active,
+            phoneNumber: nil,
+            xp: 100,
+            age: 25,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+    )
+}
 // MARK: - Supporting Views (Ugyanazok mint az előző verzióban, de most API-val)
 
 struct UserRow: View {
