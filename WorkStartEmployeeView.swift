@@ -24,25 +24,48 @@ struct WorkStartEmployeeView: View {
                 Color.white
                     .edgesIgnoringSafeArea(.all)
                 
-                ScrollView {
                     VStack(spacing: 24) {
+                        HStack {
+                            Button(action: {}) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 18))
+                                    .foregroundColor(.DesignSystem.fokekszin)
+                                    .padding(8)
+                                    .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                                    .clipShape(Circle())
+                            }
+                            
+                            Spacer()
+                            
+                            Text("Munka indítása")
+                                .font(.custom("Lexend", size: 18))
+                                .foregroundColor(.DesignSystem.fokekszin)
+                                .fontWeight(.semibold)
+                            
+                            Spacer()
+                            
+                            Button(action: {
+                                showingQRScanner = true
+                            }) {
+                                Image(systemName: "qrcode.viewfinder")
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(Color.DesignSystem.fokekszin)
+                                    .padding(8)
+                                    .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                                    .clipShape(Circle())
+                            }
+                        }
+                        .padding(.horizontal)
+                        ScrollView {
+
                         // Header
-                        VStack(spacing: 12) {
-                            Image(systemName: "qrcode.viewfinder")
-                                .font(.system(size: 50))
-                                .foregroundColor(.DesignSystem.fokekszin)
-                            
-                            Text("Munka Indítása")
-                                .font(.custom("Jellee", size: 28))
-                                .foregroundColor(.DesignSystem.fokekszin)
-                            
+                        VStack {
                             Text("Szkenneld be a munkáltató által biztosított QR kódot")
                                 .font(.custom("Lexend", size: 16))
                                 .foregroundColor(.DesignSystem.descriptions)
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 40)
                         }
-                        .padding(.top, 20)
                         
                         if isLoadingActiveWork {
                             loadingActiveWorkView
@@ -116,12 +139,6 @@ struct WorkStartEmployeeView: View {
                     .font(.custom("Jellee", size: 22))
                     .foregroundColor(.DesignSystem.fokekszin)
                 
-                Text("A munka elindításához szkenneld be a munkáltató által biztosított QR kódot")
-                    .font(.custom("Lexend", size: 14))
-                    .foregroundColor(.DesignSystem.descriptions)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
-                
                 Button(action: {
                     showingQRScanner = true
                 }) {
@@ -148,13 +165,13 @@ struct WorkStartEmployeeView: View {
                 }
                 .padding(.vertical, 8)
                 
-                // Manuális kód bevitel
+                // Manuális kód bevitel - MÓDOSÍTOTT RÉSZ
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Manuális kód bevitel")
                         .font(.custom("Lexend", size: 16))
                         .foregroundColor(.DesignSystem.fokekszin)
                     
-                    TextField("Add meg a munkakódot", text: $manualCodeInput)
+                    TextField("Add meg a munkakódot (8 karakter vagy UUID)", text: $manualCodeInput)
                         .font(.custom("Lexend", size: 16))
                         .padding()
                         .background(Color.gray.opacity(0.1))
@@ -162,13 +179,13 @@ struct WorkStartEmployeeView: View {
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
                         .onChange(of: manualCodeInput) { newValue in
-                            // Korlátozzuk a hosszt, de minden karaktert elfogadunk
-                            if newValue.count > 20 {
-                                manualCodeInput = String(newValue.prefix(20))
+                            // Korlátozzuk a hosszt - max 36 karakter (UUID hossza)
+                            if newValue.count > 36 {
+                                manualCodeInput = String(newValue.prefix(36))
                             }
                         }
                     
-                    Text("Add meg a munkáltatótól kapott kódot")
+                    Text("Add meg a munkáltatótól kapott 8 karakteres kódot vagy UUID-t")
                         .font(.custom("Lexend", size: 12))
                         .foregroundColor(.gray)
                         .multilineTextAlignment(.leading)
@@ -184,10 +201,10 @@ struct WorkStartEmployeeView: View {
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
-                        .background(manualCodeInput.count == 8 ? Color.blue : Color.gray)
+                        .background(isValidCode(manualCodeInput) ? Color.blue : Color.gray)
                         .cornerRadius(10)
                     }
-                    .disabled(manualCodeInput.isEmpty)
+                    .disabled(!isValidCode(manualCodeInput))
                 }
                 .padding()
                 .background(Color.white)
@@ -205,10 +222,9 @@ struct WorkStartEmployeeView: View {
                     .font(.custom("Jellee", size: 20))
                     .foregroundColor(.DesignSystem.fokekszin)
                 
-                InstructionRow(icon: "1.circle", text: "Kérj QR kódot vagy 8 jegyű kódot a munkáltatótól")
-                InstructionRow(icon: "2.circle", text: "Szkenneld be a QR kódot vagy írd be a 8 jegyű kódot")
-                InstructionRow(icon: "3.circle", text: "Engedélyezd a kamera használatát (QR kód esetén)")
-                InstructionRow(icon: "4.circle", text: "A munka automatikusan elindul")
+                InstructionRow(icon: "1.circle", text: "Kérj QR kódot vagy írd be manuálisan a munkáltatótól")
+                InstructionRow(icon: "2.circle", text: "A munka adatai betöltődnek")
+                InstructionRow(icon: "3.circle", text: "Sikeres kapcsolat létrejötte után indítahatjátok a munkaidőzítőt.")
             }
             .padding(20)
             .background(Color.gray.opacity(0.05))
@@ -216,6 +232,13 @@ struct WorkStartEmployeeView: View {
         }
     }
     
+    // Segédfüggvény a kód érvényességének ellenőrzésére
+    private func isValidCode(_ code: String) -> Bool {
+        // 8 karakteres kód VAGY UUID formátum (36 karakter)
+        return code.count == 8 || UUID(uuidString: code) != nil
+    }
+    
+    // ... (activeWorkView változatlan)
     private func activeWorkView(work: WorkData) -> some View {
         VStack(spacing: 24) {
             // Munka információk
@@ -316,7 +339,7 @@ struct WorkStartEmployeeView: View {
         }
     }
     
-    // MARK: - Műveletek
+    // MARK: - MÓDOSÍTOTT MŰVELETEK
     
     private func loadActiveWork() {
         guard let employeeId = userManager.currentUser?.id else {
@@ -350,7 +373,7 @@ struct WorkStartEmployeeView: View {
     private func handleQRScan(result: Result<ScanResult, ScanError>) {
         switch result {
         case .success(let result):
-            let qrCode = result.string
+            let qrCode = result.string.trimmingCharacters(in: .whitespacesAndNewlines)
             print("📱 Beolvasott QR kód: \(qrCode)")
             startWorkWithQRCode(qrCode: qrCode)
             
@@ -365,50 +388,32 @@ struct WorkStartEmployeeView: View {
         
         Task {
             do {
-                guard let workId = UUID(uuidString: qrCode) else {
-                    throw NSError(domain: "Invalid QR code", code: 400, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen QR kód formátum"])
-                }
-                
-                // Munka adatainak lekérése
-                let work = try await serverAuthManager.fetchWorkById(workId: workId)
-                
-                // Dolgozó hozzárendelése a munkához
-                let success = try await serverAuthManager.assignEmployeeToWork(
-                    workId: workId,
-                    employeeId: userManager.currentUser?.id ?? UUID()
-                )
-                
-                if success {
-                    await MainActor.run {
-                        self.activeWork = work
-                        self.isWorkActive = true
-                        self.isLoading = false
-                        self.startTimer()
-                        
-                        // Sikeres indítás értesítés felhasználói adatokkal
-                        let userName = userManager.currentUser?.name ?? "Ismeretlen"
-                        let userEmail = userManager.currentUser?.email ?? "Ismeretlen"
-                        
-                        errorMessage = """
-                        ✅ Munka sikeresen elindítva!
-                        
-                        📋 Munka adatok:
-                        - Munkáltató: \(work.employerName)
-                        - Pozíció: \(work.title)
-                        - Fizetés: \(Int(work.wage)) Ft
-                        - Fizetés típus: \(work.paymentType)
-                        
-                        👤 Felhasználó adatok:
-                        - Név: \(userName)
-                        - Email: \(userEmail)
-                        - Azonosító: \(userManager.currentUser?.id.uuidString.prefix(8) ?? "Ismeretlen")
-                        
-                        ⏰ Munka elindítva: \(formattedCurrentDate())
-                        """
-                        showingError = true
+                // 1. Próbáljuk JSON-ként értelmezni (ha a QR kód JSON objektumot tartalmaz)
+                if let data = qrCode.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let workIdString = json["workId"] as? String {
+                    
+                    let cleanedWorkId = workIdString.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let workId = UUID(uuidString: cleanedWorkId) else {
+                        throw NSError(domain: "Invalid QR code", code: 400, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen munka ID a QR kódban"])
                     }
-                } else {
-                    throw NSError(domain: "Failed to start work", code: 500, userInfo: [NSLocalizedDescriptionKey: "Nem sikerült elindítani a munkát"])
+                    
+                    let work = try await serverAuthManager.fetchWorkById(workId: workId)
+                    await assignEmployeeToWork(workId: workId, work: work)
+                    
+                }
+                // 2. Próbáljuk tiszta UUID-ként (36 karakteres formátum)
+                else if let workId = UUID(uuidString: qrCode) {
+                    let work = try await serverAuthManager.fetchWorkById(workId: workId)
+                    await assignEmployeeToWork(workId: workId, work: work)
+                }
+                // 3. Egyéb eset - hiba
+                else {
+                    throw NSError(
+                        domain: "Invalid QR code",
+                        code: 400,
+                        userInfo: [NSLocalizedDescriptionKey: "Érvénytelen QR kód formátum. A kód nem tartalmaz érvényes UUID-t."]
+                    )
                 }
                 
             } catch {
@@ -421,8 +426,31 @@ struct WorkStartEmployeeView: View {
         }
     }
     
+    private func assignEmployeeToWork(workId: UUID, work: WorkData) async {
+        do {
+            let success = try await serverAuthManager.assignEmployeeToWork(
+                workId: workId,
+                employeeId: userManager.currentUser?.id ?? UUID()
+            )
+            
+            if success {
+                await handleSuccessfulWorkStart(work: work)
+            } else {
+                throw NSError(domain: "Failed to start work", code: 500, userInfo: [NSLocalizedDescriptionKey: "Nem sikerült elindítani a munkát"])
+            }
+        } catch {
+            await MainActor.run {
+                isLoading = false
+                errorMessage = "Hiba a munka indításakor: \(error.localizedDescription)"
+                showingError = true
+            }
+        }
+    }
+    
     private func startWorkWithManualCode() {
-        guard !manualCodeInput.isEmpty else {
+        let cleanedCode = manualCodeInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        guard !cleanedCode.isEmpty else {
             errorMessage = "Kérjük adj meg egy érvényes kódot"
             showingError = true
             return
@@ -432,35 +460,23 @@ struct WorkStartEmployeeView: View {
         
         Task {
             do {
-                // Először próbáljuk UUID-ként értelmezni (QR kód esetén)
-                if let workId = UUID(uuidString: manualCodeInput) {
-                    // UUID formátum - QR kódból származik
+                // 1. Próbáljuk UUID-ként (36 karakteres formátum)
+                if let workId = UUID(uuidString: cleanedCode) {
                     let work = try await serverAuthManager.fetchWorkById(workId: workId)
-                    
-                    let success = try await serverAuthManager.assignEmployeeToWork(
-                        workId: workId,
-                        employeeId: userManager.currentUser?.id ?? UUID()
+                    await assignEmployeeToWork(workId: workId, work: work)
+                }
+                // 2. Próbáljuk rövid kódként (8 karakter)
+                else if cleanedCode.count == 8 {
+                    let work = try await serverAuthManager.fetchWorkByManualCode(manualCode: cleanedCode)
+                    await assignEmployeeToWork(workId: work.id, work: work)
+                }
+                // 3. Egyéb eset - hiba
+                else {
+                    throw NSError(
+                        domain: "Invalid code format",
+                        code: 400,
+                        userInfo: [NSLocalizedDescriptionKey: "Érvénytelen kód formátum. Használj 8 karakteres kódot vagy UUID-t (36 karakter)."]
                     )
-                    
-                    if success {
-                        await handleSuccessfulWorkStart(work: work)
-                    } else {
-                        throw NSError(domain: "Failed to start work", code: 500, userInfo: [NSLocalizedDescriptionKey: "Nem sikerült elindítani a munkát"])
-                    }
-                } else {
-                    // Nem UUID formátum - manuális kód
-                    let work = try await serverAuthManager.fetchWorkByManualCode(manualCode: manualCodeInput)
-                    
-                    let success = try await serverAuthManager.assignEmployeeToWork(
-                        workId: work.id,
-                        employeeId: userManager.currentUser?.id ?? UUID()
-                    )
-                    
-                    if success {
-                        await handleSuccessfulWorkStart(work: work)
-                    } else {
-                        throw NSError(domain: "Failed to start work", code: 500, userInfo: [NSLocalizedDescriptionKey: "Nem sikerült elindítani a munkát"])
-                    }
                 }
                 
             } catch {
@@ -481,9 +497,8 @@ struct WorkStartEmployeeView: View {
             self.manualCodeInput = ""
             self.startTimer()
             
-            // Sikeres indítás értesítés felhasználói adatokkal
+            // Sikeres indítás értesítés
             let userName = userManager.currentUser?.name ?? "Ismeretlen"
-            let userEmail = userManager.currentUser?.email ?? "Ismeretlen"
             
             errorMessage = """
             ✅ Munka sikeresen elindítva!
@@ -495,10 +510,8 @@ struct WorkStartEmployeeView: View {
             - Fizetés típus: \(work.paymentType)
             - Helyszín: \(work.location.isEmpty ? "Nincs megadva" : work.location)
             
-            👤 Felhasználó adatok:
+            👤 Dolgozó:
             - Név: \(userName)
-            - Email: \(userEmail)
-            - Azonosító: \(userManager.currentUser?.id.uuidString.prefix(8) ?? "Ismeretlen")
             
             ⏰ Munka elindítva: \(formattedCurrentDate())
             """
@@ -587,6 +600,8 @@ struct WorkStartEmployeeView: View {
         return formatter.string(from: Date())
     }
 }
+
+// ... (a segéd struktúrák változatlanok maradnak)
 
 // MARK: - Segédelemek
 

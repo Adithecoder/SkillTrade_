@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+import AuthenticationServices
+import CryptoKit
 
 class ServerAuthManager: ObservableObject {
     static let shared = ServerAuthManager()
@@ -22,6 +24,98 @@ class ServerAuthManager: ObservableObject {
     private init() {}
     
     // MARK: - Bejelentkezés
+    
+    func loginWithGoogle(token: String, completion: @escaping (Bool) -> Void) {
+           isLoading = true
+           error = nil
+           
+           guard let url = URL(string: "\(baseURL)/auth/google") else {
+               error = "Érvénytelen URL"
+               isLoading = false
+               completion(false)
+               return
+           }
+           
+           var request = URLRequest(url: url)
+           request.httpMethod = "POST"
+           request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+           
+           let body: [String: Any] = [
+               "token": token
+           ]
+           
+           do {
+               request.httpBody = try JSONSerialization.data(withJSONObject: body)
+           } catch {
+               self.error = "Hibás adat formátum"
+               self.isLoading = false
+               completion(false)
+               return
+           }
+           
+           URLSession.shared.dataTask(with: request) { data, response, error in
+               DispatchQueue.main.async {
+                   self.isLoading = false
+                   
+                   if let error = error {
+                       self.error = error.localizedDescription
+                       completion(false)
+                       return
+                   }
+                   
+                   guard let httpResponse = response as? HTTPURLResponse else {
+                       self.error = "Érvénytelen válasz"
+                       completion(false)
+                       return
+                   }
+                   
+                   guard let data = data else {
+                       self.error = "Nincs adat"
+                       completion(false)
+                       return
+                   }
+                   
+                   print("🔐 Google login response status: \(httpResponse.statusCode)")
+                   
+                   if httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
+                       do {
+                           let authResponse = try JSONDecoder().decode(LoginResponse.self, from: data)
+                           let user = User.fromServerUser(authResponse.user)
+                           
+                           self.isAuthenticated = true
+                           self.currentUser = user
+                           self.userManager.currentUser = user
+                           self.userManager.isAuthenticated = true
+                           
+                           // Token mentése
+                           UserDefaults.standard.set(authResponse.token, forKey: "authToken")
+                           UserDefaults.standard.set(authResponse.user.id, forKey: "userId")
+                           UserDefaults.standard.set(true, forKey: "isLoggedIn")
+                           
+                           // Lokális mentés
+                           self.saveUserLocally(user)
+                           
+                           print("✅ Google login successful")
+                           completion(true)
+                       } catch {
+                           print("JSON decode error: \(error)")
+                           self.error = "Hibás válasz formátum"
+                           completion(false)
+                       }
+                   } else {
+                       do {
+                           let errorResponse = try JSONDecoder().decode(ErrorResponse.self, from: data)
+                           self.error = errorResponse.message
+                       } catch {
+                           let responseString = String(data: data, encoding: .utf8) ?? "Unknown error"
+                           self.error = "Google bejelentkezési hiba (\(httpResponse.statusCode)): \(responseString)"
+                       }
+                       completion(false)
+                   }
+               }
+           }.resume()
+       }
+    // ServerAuthManager.swift - Javított login metódus
     func login(identifier: String, password: String, completion: @escaping (Bool) -> Void) {
         isLoading = true
         error = nil
@@ -73,12 +167,12 @@ class ServerAuthManager: ObservableObject {
                     return
                 }
                 
-                print("Login response status: \(httpResponse.statusCode)")
+                print("🔐 LOGIN - Response status: \(httpResponse.statusCode)")
                 
                 if httpResponse.statusCode == 200 {
                     do {
                         let decoder = JSONDecoder()
-                        decoder.dateDecodingStrategy = .customISO8601 // Használd a custom dátum kezelést
+                        decoder.dateDecodingStrategy = .customISO8601
                         
                         let loginResponse = try decoder.decode(LoginResponse.self, from: data)
                         let user = User.fromServerUser(loginResponse.user)
@@ -90,10 +184,20 @@ class ServerAuthManager: ObservableObject {
                         self.userManager.currentUser = user
                         self.userManager.isAuthenticated = true
                         
-                        // Token és user adatok mentése
+                        // TOKEN MENTÉS - JAVÍTOTT VERZIÓ
+                        print("💾 TOKEN SAVE - Saving token: \(loginResponse.token.prefix(20))...")
+                        
                         UserDefaults.standard.set(loginResponse.token, forKey: "authToken")
                         UserDefaults.standard.set(loginResponse.user.id, forKey: "userId")
                         UserDefaults.standard.set(true, forKey: "isLoggedIn")
+                        
+                        // Azonnali szinkronizálás
+                        UserDefaults.standard.synchronize()
+                        
+                        // Ellenőrzés
+                        let savedToken = UserDefaults.standard.string(forKey: "authToken")
+                        print("💾 TOKEN SAVE - Verification: \(savedToken != nil ? "SUCCESS" : "FAILED")")
+                        print("💾 TOKEN SAVE - Token length: \(savedToken?.count ?? 0)")
                         
                         // Lokális user adatok mentése
                         self.saveUserLocally(user)
@@ -101,7 +205,6 @@ class ServerAuthManager: ObservableObject {
                         completion(true)
                     } catch {
                         print("JSON decode error: \(error)")
-                        print("Error details: \(error.localizedDescription)")
                         self.error = "Hibás válasz formátum: \(error.localizedDescription)"
                         completion(false)
                     }
@@ -119,6 +222,80 @@ class ServerAuthManager: ObservableObject {
         }.resume()
     }
     
+    // ServerAuthManager.swift - Token recovery
+    func validateAndRecoverToken(completion: @escaping (Bool) -> Void) {
+        guard let token = UserDefaults.standard.string(forKey: "authToken") else {
+            print("❌ TOKEN RECOVERY - No token found")
+            completion(false)
+            return
+        }
+        
+        print("🔐 TOKEN RECOVERY - Validating token: \(token.prefix(20))...")
+        
+        // Validate token with server
+        guard let url = URL(string: "\(baseURL)/auth/me") else {
+            completion(false)
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("❌ TOKEN RECOVERY - Network error: \(error)")
+                    completion(false)
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    print("❌ TOKEN RECOVERY - Invalid response")
+                    completion(false)
+                    return
+                }
+                
+                print("🔐 TOKEN RECOVERY - Validation response: \(httpResponse.statusCode)")
+                
+                if httpResponse.statusCode == 200 {
+                    print("✅ TOKEN RECOVERY - Token is valid")
+                    self.isAuthenticated = true
+                    
+                    // Load user data
+                    if let data = data {
+                        do {
+                            let userResponse = try JSONDecoder().decode(UserResponse.self, from: data)
+                            let user = User.fromServerUser(userResponse.user)
+                            self.currentUser = user
+                            self.userManager.currentUser = user
+                            self.saveUserLocally(user)
+                        } catch {
+                            print("❌ TOKEN RECOVERY - User data decode error: \(error)")
+                        }
+                    }
+                    
+                    completion(true)
+                } else {
+                    print("❌ TOKEN RECOVERY - Token is invalid")
+                    // Clear invalid token
+                    self.clearAuthData()
+                    completion(false)
+                }
+            }
+        }.resume()
+    }
+    
+    private func clearAuthData() {
+        UserDefaults.standard.removeObject(forKey: "authToken")
+        UserDefaults.standard.removeObject(forKey: "userId")
+        UserDefaults.standard.removeObject(forKey: "isLoggedIn")
+        UserDefaults.standard.removeObject(forKey: "currentUserData")
+        self.isAuthenticated = false
+        self.currentUser = nil
+        self.userManager.currentUser = nil
+        self.userManager.isAuthenticated = false
+    }
     // MARK: - Regisztráció
     func register(name: String, email: String, username: String, password: String, age: Int, completion: @escaping (Bool) -> Void) {
         isLoading = true
@@ -330,19 +507,34 @@ class ServerAuthManager: ObservableObject {
       }
   
     // MARK: - Token Management
-    public func getAuthToken() -> String? {
-        return UserDefaults.standard.string(forKey: tokenKey)
+    func getAuthToken() -> String? {
+        let token = UserDefaults.standard.string(forKey: "authToken")
+        print("🔐 TOKEN DEBUG - Retrieved token: \(token != nil ? "YES" : "NO")")
+        print("🔐 TOKEN DEBUG - Token length: \(token?.count ?? 0)")
+        if let token = token {
+            print("🔐 TOKEN DEBUG - Token prefix: \(token.prefix(20))...")
+        }
+        return token
     }
 
     private func saveAuthToken(_ token: String) {
-        UserDefaults.standard.set(token, forKey: tokenKey)
+        UserDefaults.standard.set(token, forKey: "authToken")
+        UserDefaults.standard.synchronize() // Force immediate save
+        print("💾 TOKEN SAVED - Length: \(token.count)")
     }
 
     private func removeAuthToken() {
         UserDefaults.standard.removeObject(forKey: tokenKey)
         UserDefaults.standard.removeObject(forKey: userIdKey)
     }
-
+    func hasValidToken() -> Bool {
+        guard let token = UserDefaults.standard.string(forKey: "authToken"),
+              !token.isEmpty,
+              UserDefaults.standard.bool(forKey: "isLoggedIn") else {
+            return false
+        }
+        return true
+    }
     private func saveUserId(_ userId: String) {
         UserDefaults.standard.set(userId, forKey: userIdKey)
     }
@@ -497,17 +689,190 @@ class ServerAuthManager: ObservableObject {
         }.resume()
     }
     
-    // MARK: - Helper metódusok
-    private func saveUserLocally(_ user: User) {
-        // Itt mentheted a user adatokat lokálisan, ha szükséges
-        // Például CoreData-ba vagy UserDefaults-ba
+    // MARK: - Review Management Methods
+
+    // ÚJ ÉRTÉKELÉS LÉTREHOZÁSA
+    func createReview(_ reviewRequest: CreateReviewRequest) async throws -> Bool {
+        guard isAuthenticated, let token = UserDefaults.standard.string(forKey: "authToken") else {
+            throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Nincs érvényes token"])
+        }
+        
+        guard let url = URL(string: "\(baseURL)/reviews") else {
+            throw NSError(domain: "Network", code: 400, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen URL"])
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        
         do {
-            let userData = try JSONEncoder().encode(user)
-            UserDefaults.standard.set(userData, forKey: "currentUserData")
+            request.httpBody = try encoder.encode(reviewRequest)
         } catch {
-            print("Error saving user locally: \(error)")
+            throw error
+        }
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "Network", code: 500, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen válasz"])
+        }
+        
+        if httpResponse.statusCode == 201 {
+            print("✅ Értékelés sikeresen létrehozva")
+            return true
+        } else {
+            let errorResponse = try JSONDecoder().decode(ErrorResponse.self, from: data)
+            throw NSError(domain: "Server", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.message])
         }
     }
+
+    // FELHASZNÁLÓ ÉRTÉKELÉSEINEK LEKÉRÉSE
+    func fetchUserReviews(userId: UUID, type: String? = nil) async throws -> [Review2] {
+        guard isAuthenticated, let token = UserDefaults.standard.string(forKey: "authToken") else {
+            throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Nincs érvényes token"])
+        }
+        
+        var urlComponents = URLComponents(string: "\(baseURL)/reviews/user/\(userId.uuidString)")
+        if let type = type {
+            urlComponents?.queryItems = [URLQueryItem(name: "type", value: type)]
+        }
+        
+        guard let url = urlComponents?.url else {
+            throw NSError(domain: "Network", code: 400, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen URL"])
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "Network", code: 500, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen válasz"])
+        }
+        
+        if httpResponse.statusCode == 200 {
+            do {
+                let reviewsResponse = try JSONDecoder().decode(ReviewsResponse.self, from: data)
+                return reviewsResponse.reviews.map { $0.toReview() }
+            } catch {
+                print("❌ Reviews decode error: \(error)")
+                throw error
+            }
+        } else {
+            let errorResponse = try JSONDecoder().decode(ErrorResponse.self, from: data)
+            throw NSError(domain: "Server", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.message])
+        }
+    }
+
+    // MUNKA ÉRTÉKELÉSEINEK LEKÉRÉSE
+    func fetchWorkReviews(workId: UUID) async throws -> [Review2] {
+        guard isAuthenticated, let token = UserDefaults.standard.string(forKey: "authToken") else {
+            throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Nincs érvényes token"])
+        }
+        
+        guard let url = URL(string: "\(baseURL)/reviews/work/\(workId.uuidString)") else {
+            throw NSError(domain: "Network", code: 400, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen URL"])
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "Network", code: 500, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen válasz"])
+        }
+        
+        if httpResponse.statusCode == 200 {
+            do {
+                let reviewsResponse = try JSONDecoder().decode(ReviewsResponse.self, from: data)
+                return reviewsResponse.reviews.map { $0.toReview() }
+            } catch {
+                print("❌ Work reviews decode error: \(error)")
+                throw error
+            }
+        } else {
+            let errorResponse = try JSONDecoder().decode(ErrorResponse.self, from: data)
+            throw NSError(domain: "Server", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.message])
+        }
+    }
+
+    // SAJÁT ÉRTÉKELÉSEIM LEKÉRÉSE
+    func fetchMyReviews(reviewerId: UUID) async throws -> [Review2] {
+        guard isAuthenticated, let token = UserDefaults.standard.string(forKey: "authToken") else {
+            throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Nincs érvényes token"])
+        }
+        
+        guard let url = URL(string: "\(baseURL)/reviews/my-reviews/\(reviewerId.uuidString)") else {
+            throw NSError(domain: "Network", code: 400, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen URL"])
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "Network", code: 500, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen válasz"])
+        }
+        
+        if httpResponse.statusCode == 200 {
+            do {
+                let reviewsResponse = try JSONDecoder().decode(ReviewsResponse.self, from: data)
+                return reviewsResponse.reviews.map { $0.toReview() }
+            } catch {
+                print("❌ My reviews decode error: \(error)")
+                throw error
+            }
+        } else {
+            let errorResponse = try JSONDecoder().decode(ErrorResponse.self, from: data)
+            throw NSError(domain: "Server", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.message])
+        }
+    }
+
+    // ÉRTÉKELÉS TÖRLÉSE
+    func deleteReview(reviewId: UUID) async throws -> Bool {
+        guard isAuthenticated, let token = UserDefaults.standard.string(forKey: "authToken") else {
+            throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Nincs érvényes token"])
+        }
+        
+        guard let url = URL(string: "\(baseURL)/reviews/\(reviewId.uuidString)") else {
+            throw NSError(domain: "Network", code: 400, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen URL"])
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "Network", code: 500, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen válasz"])
+        }
+        
+        if httpResponse.statusCode == 200 {
+            return true
+        } else {
+            let errorResponse = try JSONDecoder().decode(ErrorResponse.self, from: data)
+            throw NSError(domain: "Server", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.message])
+        }
+    }
+    // MARK: - Helper metódusok
+    func saveUserLocally(_ user: User) {
+    do {
+        let data = try JSONEncoder().encode(user)
+        UserDefaults.standard.set(data, forKey: "currentUser")
+    } catch {
+        print("Failed to encode user for local storage: \(error)")
+    }
+}
     
     private func loadUserLocally() -> User? {
         guard let userData = UserDefaults.standard.data(forKey: "currentUserData") else {
@@ -524,65 +889,52 @@ class ServerAuthManager: ObservableObject {
     
     // MARK: - Auto bejelentkezés
     func autoLogin(completion: @escaping (Bool) -> Void) {
-        guard let token = UserDefaults.standard.string(forKey: "authToken") else {
+        print("🔄 AUTO LOGIN - Starting auto login process")
+        
+        // First check if we have a token
+        guard hasValidToken() else {
+            print("❌ AUTO LOGIN - No valid token found")
             completion(false)
             return
         }
         
-        
-        
-        // Először próbáljuk meg a lokális user adatokat betölteni
+        // Try to load user data locally first (faster)
         if let localUser = loadUserLocally() {
+            print("✅ AUTO LOGIN - Loaded user from local storage")
             self.currentUser = localUser
             self.userManager.currentUser = localUser
             self.isAuthenticated = true
+            self.userManager.isAuthenticated = true
             completion(true)
             return
         }
         
-        // Ha nincs lokális adat, akkor kérjük le a szerverről
-        guard let url = URL(string: "\(baseURL)/auth/me") else {
-            completion(false)
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    print("Auto login error: \(error)")
-                    completion(false)
-                    return
-                }
-                
-                guard let httpResponse = response as? HTTPURLResponse,
-                      httpResponse.statusCode == 200,
-                      let data = data else {
-                    completion(false)
-                    return
-                }
-                
-                do {
-                    let userResponse = try JSONDecoder().decode(UserResponse.self, from: data)
-                    let user = User.fromServerUser(userResponse.user)
-                    
-                    self.isAuthenticated = true
-                    self.currentUser = user
-                    self.userManager.currentUser = user
-                    
-                    self.saveUserLocally(user)
-                    completion(true)
-                } catch {
-                    print("Auto login decode error: \(error)")
-                    completion(false)
-                }
+        // If no local data, validate token with server
+        validateAndRecoverToken { success in
+            if success {
+                print("✅ AUTO LOGIN - Successfully restored session")
+                completion(true)
+            } else {
+                print("❌ AUTO LOGIN - Token validation failed")
+                completion(false)
             }
-        }.resume()
+        }
     }
-    
+    // Add to ServerAuthManager for debugging
+    func debugTokenStatus() {
+        let hasToken = UserDefaults.standard.string(forKey: "authToken") != nil
+        let isLoggedIn = UserDefaults.standard.bool(forKey: "isLoggedIn")
+        let tokenLength = UserDefaults.standard.string(forKey: "authToken")?.count ?? 0
+        
+        print("""
+        🔐 TOKEN DEBUG:
+        - Has Token: \(hasToken)
+        - Is Logged In: \(isLoggedIn)
+        - Token Length: \(tokenLength)
+        - Server Auth: \(isAuthenticated)
+        - User Manager Auth: \(userManager.isAuthenticated)
+        """)
+    }
     // MARK: - Kijelentkezés
     func logout() {
         isAuthenticated = false
@@ -640,6 +992,7 @@ class ServerAuthManager: ObservableObject {
         print("📤 Küldött munka adatai a szervernek:")
         print("  - ID: \(workData.id.uuidString)")
         print("  - Cím: \(workData.title)")
+        print("  - Leírás: \(workData.description ?? "Nincs leírás")") // DEBUG
         print("  - Munkáltató: \(workData.employerName)")
         print("  - Munkáltató ID: \(workData.employerID.uuidString)")
         print("  - Bér: \(workData.wage)")
@@ -788,6 +1141,12 @@ class ServerAuthManager: ObservableObject {
             }
         }
         
+    // ServerAuthManager.swift-hez add hozzá:
+    func removeEmployeeFromWork(workId: UUID, employeeId: UUID) async throws -> Bool {
+        // Itt implementáld a backend hívást
+        // amely eltávolítja a dolgozót a munkából
+        return true // placeholder
+    }
     func updateApplicationStatus(applicationId: String, status: String) async throws {
           guard isAuthenticated,
                 let token = UserDefaults.standard.string(forKey: "authToken"),
@@ -1233,9 +1592,629 @@ class ServerAuthManager: ObservableObject {
         return nil
     }
 
+    // MARK: - User Management Methods
+
+    func updateUser(userId: UUID, updates: [String: Any], completion: @escaping (Bool, User?) -> Void) {
+        guard let token = getAuthToken() else {
+            completion(false, nil)
+            return
+        }
+        
+        // Küldjük el az email címet a frissítéshez (mert az egyedi)
+        guard let userEmail = currentUser?.email else {
+            completion(false, nil)
+            return
+        }
+        
+        // Email alapján frissítünk, mert az egyedi
+        let url = URL(string: "\(baseURL)/auth/verify-by-email")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Csak az email és isVerified mezőket küldjük
+        let body: [String: Any] = [
+            "email": userEmail,
+            "isVerified": updates["isVerified"] as? Bool ?? false
+        ]
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            print("🔧 Sending verification update: \(body)")
+        } catch {
+            print("❌ Request body error: \(error)")
+            completion(false, nil)
+            return
+        }
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                print("❌ Update user error: \(error)")
+                completion(false, nil)
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("❌ Invalid response")
+                completion(false, nil)
+                return
+            }
+            
+            print("📡 Update user response status: \(httpResponse.statusCode)")
+            
+            if httpResponse.statusCode == 200 {
+                // Sikeres frissítés - lokálisan is frissítsük a usert
+                if var currentUser = self.currentUser {
+                    currentUser.isVerified = updates["isVerified"] as? Bool ?? false
+                    self.currentUser = currentUser
+                    self.userManager.currentUser = currentUser
+                    
+                    print("✅ User verification updated locally: \(currentUser.isVerified)")
+                    completion(true, currentUser)
+                } else {
+                    completion(true, nil)
+                }
+            } else {
+                print("❌ Update user failed with status: \(httpResponse.statusCode)")
+                if let data = data, let responseString = String(data: data, encoding: .utf8) {
+                    print("❌ Server response: \(responseString)")
+                }
+                completion(false, nil)
+            }
+        }.resume()
+    }
+    
+    
+    func suspendUser(userId: UUID, suspended: Bool, completion: @escaping (Bool) -> Void) {
+        guard let token = getAuthToken() else {
+            completion(false)
+            return
+        }
+        
+        let url = URL(string: "\(baseURL)/auth/users/\(userId.uuidString)/suspend")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = ["suspended": suspended]
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            print("❌ Request body error: \(error)")
+            completion(false)
+            return
+        }
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                print("❌ Suspend user error: \(error)")
+                completion(false)
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(false)
+                return
+            }
+            
+            if httpResponse.statusCode == 200 {
+                print("✅ User suspension updated: \(suspended)")
+                completion(true)
+            } else {
+                print("❌ Suspend user failed with status: \(httpResponse.statusCode)")
+                completion(false)
+            }
+        }.resume()
+    }
+
+    // ServerAuthManager.swift - DEBUG verzió
+    func deleteUser(userId: UUID, completion: @escaping (Bool) -> Void) {
+        guard let token = getAuthToken() else {
+            print("❌ DELETE DEBUG - No auth token")
+            completion(false)
+            return
+        }
+        
+        let urlString = "\(baseURL)/auth/users/\(userId.uuidString)"
+        print("🗑️ DELETE DEBUG - URL: \(urlString)")
+        print("🗑️ DELETE DEBUG - UserId: \(userId.uuidString)")
+        
+        guard let url = URL(string: urlString) else {
+            print("❌ DELETE DEBUG - Invalid URL")
+            completion(false)
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        print("🗑️ DELETE DEBUG - Sending request...")
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                print("❌ DELETE DEBUG - Network error: \(error)")
+                completion(false)
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("❌ DELETE DEBUG - Invalid response")
+                completion(false)
+                return
+            }
+            
+            print("🗑️ DELETE DEBUG - Response status: \(httpResponse.statusCode)")
+            
+            if let data = data, let responseString = String(data: data, encoding: .utf8) {
+                print("🗑️ DELETE DEBUG - Response body: \(responseString)")
+            }
+            
+            if httpResponse.statusCode == 200 {
+                print("✅ DELETE DEBUG - User deleted successfully")
+                completion(true)
+            } else {
+                print("❌ DELETE DEBUG - Delete failed with status: \(httpResponse.statusCode)")
+                completion(false)
+            }
+        }.resume()
+    }
+    
+    // ServerAuthManager.swift - Email alapú törlés
+    func deleteUserByEmail(userEmail: String, completion: @escaping (Bool) -> Void) {
+        guard let token = getAuthToken() else {
+            print("❌ EMAIL DELETE - No auth token")
+            completion(false)
+            return
+        }
+        
+        // URL encode the email
+        guard let encodedEmail = userEmail.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            print("❌ EMAIL DELETE - Cannot encode email")
+            completion(false)
+            return
+        }
+        
+        let urlString = "\(baseURL)/auth/users/by-email/\(encodedEmail)"
+        print("🗑️ EMAIL DELETE - URL: \(urlString)")
+        print("🗑️ EMAIL DELETE - Email: \(userEmail)")
+        
+        guard let url = URL(string: urlString) else {
+            print("❌ EMAIL DELETE - Invalid URL")
+            completion(false)
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 30
+        
+        print("🗑️ EMAIL DELETE - Sending request...")
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                print("❌ EMAIL DELETE - Network error: \(error)")
+                completion(false)
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("❌ EMAIL DELETE - Invalid response")
+                completion(false)
+                return
+            }
+            
+            print("🗑️ EMAIL DELETE - Response status: \(httpResponse.statusCode)")
+            
+            if let data = data, let responseString = String(data: data, encoding: .utf8) {
+                print("🗑️ EMAIL DELETE - Response body: \(responseString)")
+            }
+            
+            if httpResponse.statusCode == 200 {
+                print("✅ EMAIL DELETE - User deleted successfully")
+                completion(true)
+            } else {
+                print("❌ EMAIL DELETE - Delete failed with status: \(httpResponse.statusCode)")
+                completion(false)
+            }
+        }.resume()
+    }
+    
+    // Add this method to ServerAuthManager class
+    private func parseSimpleUser(_ userDict: [String: Any]) -> User? {
+        print("🔍 Parsing user from update: \(userDict)")
+        
+        // ID kezelés
+        let id: UUID
+        if let idInt = userDict["id"] as? Int {
+            // SQLite integer ID - generáljunk belőle UUID-t
+            id = UUID()
+        } else if let idString = userDict["id"] as? String, let uuid = UUID(uuidString: idString) {
+            id = uuid
+        } else if let idString = userDict["_id"] as? String, let uuid = UUID(uuidString: idString) {
+            id = uuid
+        } else {
+            print("❌ Invalid ID in userDict: \(userDict["id"] ?? "nil")")
+            return nil
+        }
+        
+        guard let name = userDict["name"] as? String,
+              let email = userDict["email"] as? String,
+              let username = userDict["username"] as? String else {
+            print("❌ Missing required fields in userDict")
+            return nil
+        }
+        
+        let age = userDict["age"] as? Int ?? 0
+        let isVerified = userDict["isVerified"] as? Bool ?? false
+        
+        // User role parsing
+        let userRoleString = userDict["userRole"] as? String ?? "client"
+        let userRole: UserRole
+        switch userRoleString.lowercased() {
+        case "admin":
+            userRole = .admin
+        case "serviceprovider", "service_provider":
+            userRole = .serviceProvider
+        default:
+            userRole = .client
+        }
+        
+        // Status parsing
+        let statusString = userDict["status"] as? String ?? "active"
+        let status: UserStatus
+        switch statusString.lowercased() {
+        case "active":
+            status = .active
+        case "suspended":
+            status = .suspended
+        default:
+            status = .pending
+        }
+        
+        // Date parsing
+        let dateFormatter = ISO8601DateFormatter()
+        let createdAt = (userDict["createdAt"] as? String).flatMap { dateFormatter.date(from: $0) }
+        let updatedAt = (userDict["updatedAt"] as? String).flatMap { dateFormatter.date(from: $0) }
+        
+        return User(
+            id: id,
+            name: name,
+            email: email,
+            username: username,
+            bio: userDict["bio"] as? String ?? "",
+            rating: userDict["rating"] as? Double ?? 0.0,
+            reviews: [],
+            location: Location(
+                city: userDict["location_city"] as? String ?? "",
+                country: userDict["location_country"] as? String ?? ""
+            ),
+            skills: [],
+            pricing: [],
+            isVerified: isVerified,
+            servicesOffered: userDict["servicesOffered"] as? String ?? "",
+            servicesAdvertised: userDict["servicesAdvertised"] as? String ?? "",
+            userRole: userRole,
+            status: status,
+            phoneNumber: userDict["phoneNumber"] as? String,
+            xp: userDict["xp"] as? Int ?? 0,
+            age: age,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+    
+}
+class GoogleSignInManager: NSObject, ObservableObject {
+    let authManager = ServerAuthManager.shared
+    static let sharedGoogle = GoogleSignInManager()
+    @Published var isAuthenticated = false
+    @Published var currentUser: User?
+    @Published var isLoading = false
+        @Published var error: String? = nil
+    private override init() {}
+    
+    public var baseURL: String {
+        return "http://localhost:3000/api" // vagy amit használsz
+    }
     
     
     
+    // Google bejelentkezés indítása
+    func signInWithGoogle(presentingViewController: UIViewController? = nil, completion: @escaping (Bool, String?) -> Void) {
+        // Itt implementáld a Google bejelentkezést
+        // Ehhez szükséges a GoogleSignIn SDK hozzáadása a projekthez
+        
+        // Átmeneti megoldás - redirect a Google OAuth oldalra
+        if let googleAuthURL = URL(string: "https://accounts.google.com/o/oauth2/v2/auth?client_id=\(getGoogleClientID())&redirect_uri=\(getRedirectURI())&response_type=code&scope=email%20profile") {
+            UIApplication.shared.open(googleAuthURL)
+        }
+    }
+    // ServerAuthManager.swift - Add hozzá ezt a metódust a ServerAuthManager osztályba
+
+    // ServerAuthManager.swift - Add hozzá EZT a metódust az OSZTÁLYON BELÜLRE
+
+    // MARK: - Apple Login
+    // ServerAuthManager.swift - Add hozzá EZT a metódust az OSZTÁLYON BELÜLRE
+
+    // MARK: - Apple Login
+    func loginWithApple(identityToken: String, completion: @escaping (Bool) -> Void) {
+        // Használd a ServerAuthManager property-ket, ne a GoogleSignInManager-ét
+        self.isLoading = true
+        self.error = nil
+        
+        guard let url = URL(string: "\(self.baseURL)/auth/apple") else {
+            self.error = "Érvénytelen URL"
+            self.isLoading = false
+            completion(false)
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Apple adatok összeállítása
+        let body: [String: Any] = [
+            "identityToken": identityToken,
+            "userIdentifier": "",
+            "email": "",
+            "fullName": ""
+        ]
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            self.error = "Hibás adat formátum"
+            self.isLoading = false
+            completion(false)
+            return
+        }
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                
+                if let error = error {
+                    self.error = error.localizedDescription
+                    completion(false)
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    self.error = "Érvénytelen válasz"
+                    completion(false)
+                    return
+                }
+                
+                guard let data = data else {
+                    self.error = "Nincs adat"
+                    completion(false)
+                    return
+                }
+                
+                print("🔐 Apple login response status: \(httpResponse.statusCode)")
+                
+                if httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
+                    do {
+                        let authResponse = try JSONDecoder().decode(LoginResponse.self, from: data)
+                        let user = User.fromServerUser(authResponse.user)
+                        
+                        self.isAuthenticated = true
+                        self.currentUser = user
+                        self.currentUser = user
+                        self.isAuthenticated = true
+                        
+                        // Token mentése
+                        UserDefaults.standard.set(authResponse.token, forKey: "authToken")
+                        UserDefaults.standard.set(authResponse.user.id, forKey: "userId")
+                        UserDefaults.standard.set(true, forKey: "isLoggedIn")
+                        
+                        // Lokális mentés
+//                        self.saveUserLocally(user)
+                        
+                        print("✅ Apple login successful")
+                        completion(true)
+                    } catch {
+                        print("JSON decode error: \(error)")
+                        self.error = "Hibás válasz formátum"
+                        completion(false)
+                    }
+                } else {
+                    do {
+                        let errorResponse = try JSONDecoder().decode(ErrorResponse.self, from: data)
+                        self.error = errorResponse.message
+                    } catch {
+                        let responseString = String(data: data, encoding: .utf8) ?? "Unknown error"
+                        self.error = "Apple bejelentkezési hiba (\(httpResponse.statusCode)): \(responseString)"
+                    }
+                    completion(false)
+                }
+            }
+        }.resume()
+    }
+    
+    private func getGoogleClientID() -> String {
+        return "your-google-client-id" // Cseréld le a valódi client ID-re
+    }
+    
+    private func getRedirectURI() -> String {
+        return "your-app://google-auth" // Cseréld le a valódi redirect URI-ra
+    }
+    
+    // Google token küldése a szervernek
+    func sendGoogleTokenToServer(_ token: String, completion: @escaping (Bool) -> Void) {
+        guard let url = URL(string: "\(ServerAuthManager.shared.baseURL)/auth/google") else {
+            completion(false)
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = [
+            "token": token
+        ]
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            completion(false)
+            return
+        }
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("❌ Google auth error: \(error)")
+                    completion(false)
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse,
+                      let data = data else {
+                    completion(false)
+                    return
+                }
+                
+                if httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
+                    do {
+                        let authResponse = try JSONDecoder().decode(LoginResponse.self, from: data)
+                        let user = User.fromServerUser(authResponse.user)
+                        
+                        // Token mentése
+                        UserDefaults.standard.set(authResponse.token, forKey: "authToken")
+                        UserDefaults.standard.set(authResponse.user.id, forKey: "userId")
+                        UserDefaults.standard.set(true, forKey: "isLoggedIn")
+                        
+                        // UserManager frissítése
+                        ServerAuthManager.shared.isAuthenticated = true
+                        ServerAuthManager.shared.currentUser = user
+                        UserManager.shared.currentUser = user
+                        UserManager.shared.isAuthenticated = true
+                        
+                        // Lokális mentés
+                        ServerAuthManager.shared.saveUserLocally(user)
+                        
+                        print("✅ Google login successful")
+                        completion(true)
+                    } catch {
+                        print("❌ Google auth decode error: \(error)")
+                        completion(false)
+                    }
+                } else {
+                    print("❌ Google auth failed with status: \(httpResponse.statusCode)")
+                    completion(false)
+                }
+            }
+        }.resume()
+    }
+    
+    // Ideiglenes megoldás - add direkt a ServerAuthManager osztályba
+    public func handleAppleLogin(identityToken: String, completion: @escaping (Bool) -> Void) {
+        print("Processing Apple login with token...")
+        // Ideiglenes implementáció
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            completion(true)
+        }
+    }
+        // Segéd struktúra
+        struct AppleLoginData {
+            let identityToken: String
+        }
+        
+        private func sendLoginRequest(loginData: AppleLoginData, completion: @escaping (Result<User, Error>) -> Void) {
+            // Implementáld a szerver kommunikációt
+            // ...
+        }
+    }
+
+
+
+class AppleSignInManager: NSObject, ObservableObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+    static let shared = AppleSignInManager()
+    
+    public var currentNonce: String?
+    var onCompletion: ((Bool, String?) -> Void)?
+    
+
+    
+    // ASAuthorizationControllerDelegate metódusok
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        if let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential {
+            guard let nonce = currentNonce else {
+                onCompletion?(false, "Invalid state: A login callback was received, but no login request was sent.")
+                return
+            }
+            guard let appleIDToken = appleIDCredential.identityToken else {
+                onCompletion?(false, "Unable to fetch identity token")
+                return
+            }
+            guard let idTokenString = String(data: appleIDToken, encoding: .utf8) else {
+                onCompletion?(false, "Unable to serialize token string from data")
+                return
+            }
+            
+            // Itt küldd el a token-t a szervernek
+            // Ehhez szükséges egy /api/auth/apple endpoint a szerveren
+            onCompletion?(true, idTokenString)
+        }
+    }
+    
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        onCompletion?(false, error.localizedDescription)
+    }
+    
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        return UIApplication.shared.windows.first!
+    }
+    
+    // Segéd függvények
+    public func randomNonceString(length: Int = 32) -> String {
+        precondition(length > 0)
+        let charset: [Character] = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+        var result = ""
+        var remainingLength = length
+        
+        while remainingLength > 0 {
+            let randoms: [UInt8] = (0..<16).map { _ in
+                var random: UInt8 = 0
+                let errorCode = SecRandomCopyBytes(kSecRandomDefault, 1, &random)
+                if errorCode != errSecSuccess {
+                    fatalError("Unable to generate nonce. SecRandomCopyBytes failed with OSStatus \(errorCode)")
+                }
+                return random
+            }
+            
+            randoms.forEach { random in
+                if remainingLength == 0 {
+                    return
+                }
+                
+                if random < charset.count {
+                    result.append(charset[Int(random)])
+                    remainingLength -= 1
+                }
+            }
+        }
+        
+        return result
+    }
+    
+    public func sha256(_ input: String) -> String {
+        let inputData = Data(input.utf8)
+        let hashedData = SHA256.hash(data: inputData)
+        let hashString = hashedData.compactMap {
+            String(format: "%02x", $0)
+        }.joined()
+        
+        return hashString
+    }
 }
 
 // Add this extension for date handling
@@ -1322,8 +2301,8 @@ struct ServerWork: Codable {
           location = try container.decodeIfPresent(String.self, forKey: .location) ?? ""
         skills = try container.decodeIfPresent([String].self, forKey: .skills) ?? []
         category = try container.decodeIfPresent(String.self, forKey: .category)
-          description = try container.decodeIfPresent(String.self, forKey: .description)
-          createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? Date().toISO8601String()
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? Date().toISO8601String()
           updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? Date().toISO8601String()
           employerProfileImage = try container.decodeIfPresent(String.self, forKey: .employerProfileImage)
       }
@@ -1421,6 +2400,85 @@ struct WorkCodeResponse: Codable {
     let workId: String
     let isValid: Bool
 }
+
+
+// MARK: - Review Modellek
+struct CreateReviewRequest: Codable {
+    let reviewerId: UUID
+    let reviewerName: String
+    let reviewedUserId: UUID
+    let workId: UUID
+    let rating: Int
+    let comment: String?
+    let isReliable: Bool?
+    let isPaid: Bool?
+    let type: String // "employee" vagy "employer"
+}
+
+struct ReviewResponse: Codable, Identifiable {
+    let id: String
+    let reviewerId: String
+    let reviewerName: String
+    let reviewedUserId: String
+    let workId: String
+    let workTitle: String?
+    let reviewedUserName: String?
+    let rating: Int
+    let comment: String?
+    let isReliable: Bool
+    let isPaid: Bool
+    let type: String
+    let createdAt: String
+    let updatedAt: String
+    
+    func toReview() -> Review2 {
+        let dateFormatter = ISO8601DateFormatter()
+        
+        return Review2(
+            id: UUID(uuidString: id) ?? UUID(),
+            reviewerId: UUID(uuidString: reviewerId) ?? UUID(),
+            reviewerName: reviewerName,
+            reviewedUserId: UUID(uuidString: reviewedUserId) ?? UUID(),
+            reviewedUserName: reviewedUserName,
+            workId: UUID(uuidString: workId) ?? UUID(),
+            workTitle: workTitle ?? "",
+            rating: Double(rating),
+            comment: comment ?? "",
+            isReliable: isReliable,
+            isPaid: isPaid,
+            type: type == "employee" ? .employee : .employer,
+            date: dateFormatter.date(from: createdAt) ?? Date()
+        )
+    }
+}
+
+struct ReviewsResponse: Codable {
+    let reviews: [ReviewResponse]
+    let count: Int
+}
+
+// MARK: - Review adatmodell
+struct Review2: Identifiable {
+    let id: UUID
+    let reviewerId: UUID
+    let reviewerName: String
+    let reviewedUserId: UUID
+    let reviewedUserName: String?
+    let workId: UUID
+    let workTitle: String
+    let rating: Double
+    let comment: String
+    let isReliable: Bool
+    let isPaid: Bool
+    let type: ReviewType
+    let date: Date
+}
+
+enum ReviewType {
+    case employee
+    case employer
+}
+
 
 // Add hozzá a ServerAuthManager.swift fájl végéhez
 extension Date {

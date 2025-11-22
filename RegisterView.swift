@@ -44,8 +44,8 @@
                     return
                 }
                 
-                guard ageInt >= 16 else {
-                    error = "A regisztrációhoz legalább 16 évesnek kell lenned"
+                guard ageInt >= 18 else {
+                    error = "A regisztrációhoz legalább 18 évesnek kell lenned"
                     isLoading = false
                     return
                 }
@@ -63,8 +63,8 @@
     // MARK: - Register View
 struct RegisterView: View {
     @StateObject private var viewModel = RegisterViewModel()
-    @StateObject private var serverAuth = ServerAuthManager.shared // Új szerver auth
-    
+    @StateObject private var serverAuth = ServerAuthManager.shared
+    @State private var showLogin = false
     @Environment(\.dismiss) var dismiss
     @State private var showTerms = false
     @State private var showAlert = false
@@ -72,17 +72,71 @@ struct RegisterView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
+                HStack {
+                    Button(action: {
+                        dismiss()
+
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 18))
+                            .foregroundStyle(LinearGradient(gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]),
+                                                            startPoint: .leading,
+                                                            endPoint: .trailing))
+                            .padding(8)
+                            .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                            .clipShape(Circle())
+                    }
+                    
+                    Spacer()
+                    
+                    Text("Regisztráció")
+                        .font(.custom("Lexend", size: 18))
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .fontWeight(.semibold)
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                    }) {
+                        Image(systemName: "person.crop.circle.fill.badge.plus")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Color.DesignSystem.fokekszin)
+                            .padding(8)
+                            .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                            .clipShape(Circle())
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 20)
                 VStack(spacing: 20) {
+                    
+                    Image(systemName: "person.crop.circle.fill.badge.plus")
+                        .resizable()
+                        .frame(width: 120, height: 100)
+                        .foregroundStyle(LinearGradient(gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]),
+                                                        startPoint: .top,
+                                                        endPoint: .trailing))
+                        .symbolEffect(.bounce, value: viewModel.isLoading)
+                        .shadow(color: .DesignSystem.descriptions.opacity(0.3), radius: 16, x: 4, y: 4)
+                    
+                    Text("Üdvözlünk a SkillTrade-nél!")
+                        .font(.custom("Jellee", size: 26))
+                        .multilineTextAlignment(.center)
+                    
+                    
                     Text("Regisztrálj!")
                         .font(.custom("Jellee", size: 36))
-                        .bold()
-                        .padding(.bottom)
+                        .foregroundStyle(LinearGradient(gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]), startPoint: .leading, endPoint: .trailing))
+                        .multilineTextAlignment(.center)
+
                     
                     VStack(spacing: 20) {
                         // Name and Age fields
                         HStack{
                             TextField("Teljes név", text: $viewModel.name)
-                                .padding(10)
+                                .foregroundStyle(.white)
+                                .padding(-5)
+                                .textFieldStyle(ModernTextFieldStyle())
                                 .font(.custom("Jellee", size: 16))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 15)
@@ -91,9 +145,11 @@ struct RegisterView: View {
                             
                             // Életkor mező - szám billentyűzettel
                             TextField("Életkor", text: $viewModel.age)
-                                .padding(10)
+                                .keyboardType(.numberPad)
+                                .foregroundStyle(.white)
+                                .padding(-5)
+                                .textFieldStyle(ModernTextFieldStyle())
                                 .font(.custom("Jellee", size: 16))
-                                .keyboardType(.numberPad) // Csak szám billentyűzet
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 15)
                                         .stroke(LinearGradient(gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]), startPoint: .leading, endPoint: .trailing), lineWidth: 5))
@@ -101,7 +157,9 @@ struct RegisterView: View {
                         }
                         
                         TextField("Felhasználónév", text: $viewModel.username)
-                            .padding(10)
+                            .foregroundStyle(.white)
+                            .padding(-5)
+                            .textFieldStyle(ModernTextFieldStyle())
                             .font(.custom("Jellee", size: 16))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 15)
@@ -112,8 +170,9 @@ struct RegisterView: View {
                         
                         // Email field
                         TextField("E-mail cím", text: $viewModel.email)
-                            .font(.custom("Jellee", size: 16))
-                            .padding(10)
+                            .foregroundStyle(.white)
+                            .padding(-5)
+                            .textFieldStyle(ModernTextFieldStyle())
                             .font(.custom("Jellee", size: 16))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 15)
@@ -125,14 +184,18 @@ struct RegisterView: View {
                         
                         // Password fields
                         SecureField("Jelszó", text: $viewModel.password)
-                            .padding(10)
+                            .foregroundStyle(.white)
+                            .padding(-5)
+                            .textFieldStyle(ModernTextFieldStyle())
                             .font(.custom("Jellee", size: 16))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 15)
                                     .stroke(LinearGradient(gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]), startPoint: .leading, endPoint: .trailing), lineWidth: 5))
                             .cornerRadius(15)
-                        SecureField("Jelszó megerősítése", text: $viewModel.confirmPassword)
-                            .padding(10)
+                        SecureField("Jelszó validáció", text: $viewModel.confirmPassword)
+                            .foregroundStyle(.white)
+                            .padding(-5)
+                            .textFieldStyle(ModernTextFieldStyle())
                             .font(.custom("Jellee", size: 16))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 15)
@@ -142,10 +205,10 @@ struct RegisterView: View {
                         // Terms checkboxes
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(alignment: .center, spacing: 10) {
-                                Image(systemName: "16.circle")
+                                Image(systemName: "18.circle")
                                     .font(.title2)
                                     .foregroundStyle(Color.DesignSystem.bordosszin)
-                                Text("Kijelentem, hogy elmúltam legalább 16 éves.")
+                                Text("Kijelentem, hogy elmúltam legalább 18 éves.")
                                     .font(.custom("Lexend", size: 11))
                                     .foregroundColor(.DesignSystem.bordosszin)
                                     .padding(.horizontal, 10)
@@ -157,12 +220,12 @@ struct RegisterView: View {
                                     .labelsHidden()
                                     .frame(width: 30)
                             }
-                            
+                            Button(action: { showTerms = true }) {
+
                             HStack(alignment: .center, spacing: 10) {
                                 Image(systemName: "book.pages")
                                     .font(.title2)
                                     .foregroundStyle(Color.DesignSystem.descriptions)
-                                Button(action: { showTerms = true }) {
                                     Text("Elfogadom a felhasználási feltételeket és az adatvédelmi irányelveket.")
                                         .font(.custom("Lexend", size: 11))
                                         .foregroundStyle(Color.DesignSystem.descriptions)
@@ -177,6 +240,21 @@ struct RegisterView: View {
                                         .frame(width: 30)
                                 }
                             }
+//                            NavigationLink(destination: LoginView()) {
+//                                Text("Tagunk vagy már? Jelentkezz be!")
+//                                    .font(.custom("Jellee", size: 20))
+//                                    .foregroundColor(Color.DesignSystem//.fokekszin)
+//                                    .multilineTextAlignment(.center)
+//
+                            Button(action: {
+                                dismiss()
+                            }) {
+                                Text("Tagunk vagy már? Jelentkezz be!")
+                                    .font(.custom("Jellee", size: 20))
+                                    .foregroundColor(Color.DesignSystem.fokekszin)
+                                    .multilineTextAlignment(.center)
+                            }
+ //                       }
                         }
                         .padding(.horizontal, 20)
                         .padding(.bottom,20)
@@ -214,17 +292,10 @@ struct RegisterView: View {
                     .padding(.horizontal)
                 }
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Mégse") {
-                        dismiss()
-                    }
-                    .font(.custom("Lexend", size: 17))
-                    .foregroundStyle(LinearGradient(gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]),
-                                                    startPoint: .leading,
-                                                    endPoint: .trailing))
-                }
-            }
+
+        }
+        .sheet(isPresented: $showLogin) {
+            LoginView()
         }
         .sheet(isPresented: $showTerms) {
             TermsView()
@@ -288,42 +359,166 @@ struct RegisterView: View {
 }
 
     // MARK: - Terms View
-    struct TermsView: View {
-        @Environment(\.dismiss) var dismiss
-        
-        var body: some View {
-            NavigationStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Group {
-                            Text("Felhasználási feltételek")
-                                .font(.title)
-                                .bold()
-                            
-                            Text("Az alkalmazás használatával elfogadod az alábbi feltételeket...")
-                            
-                            Text("1. Általános rendelkezések")
-                                .font(.headline)
-                            Text("Az alkalmazás használata során...")
-                            
-                            Text("2. Adatvédelem")
-                                .font(.headline)
-                            Text("Személyes adataid kezelése...")
-                        }
-                        .padding(.bottom, 8)
-                    }
-                    .padding()
-                }
-                .navigationBarItems(trailing: Button("Bezárás") {
+
+struct TermsView: View {
+    @Environment(\.dismiss) var dismiss
+    
+    // A szakaszok címei – ezekből lesznek a gombok és a cél ID-k
+    let rules = ["Általános", "Adatvédelem", "Korhatárszabályok"]
+    
+    var body: some View {
+        NavigationStack {
+            
+            HStack {
+                Button(action: {
                     dismiss()
-                })
+
+                }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 18))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.red, .blue],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                }
+                
+                Spacer()
+                
+                Text("Felhasználási feltételek")
+                    .font(.custom("Lexend", size: 18))
+                    .foregroundColor(.DesignSystem.fokekszin)
+                    .fontWeight(.semibold)
+                
+                Spacer()
+                
+                Button(action: {
+                }) {
+                    Image(systemName: "book")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Color.DesignSystem.fokekszin)
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                }
             }
+            .padding(.horizontal)
+            .padding(.top, 20)
+            
+            // Egyetlen ScrollViewReader, hogy a gombok közvetlenül tudjanak görgetni
+            ScrollViewReader { proxy in
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Felhasználási feltételeink")
+                        .font(.custom("Jellee", size: 25))
+                        .bold()
+                    
+                    Text("Az alkalmazás használatával elfogadod az alábbi feltételeket.")
+                        .font(.custom("Jellee", size: 14))
+                        .foregroundStyle(.red)
+                    
+                    // Tartalomjegyzék: gombok a rules tömbből
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            
+                            Text("Tartalom:")
+                                .font(.custom("Jellee", size: 14))
+                                .foregroundStyle(Color.DesignSystem.fokekszin)
+
+                            ForEach(rules, id: \.self) { title in
+                                Button {
+                                    withAnimation {
+                                        proxy.scrollTo(title, anchor: .top)
+                                    }
+                                } label: {
+                                    Text(title)
+                                        .foregroundStyle(Color.DesignSystem.fokekszin)
+                                        .font(.custom("Jellee", size: 14))
+                                        .padding(.vertical, 8)
+                                        .padding(.horizontal, 10)
+                                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                                        .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(Color.DesignSystem.fenyozold, lineWidth: 3)
+                                        )
+                                        .cornerRadius(12)
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Tartalom: azonosítók a címeken, hogy oda lehessen görgetni
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            // 1. szakasz
+                            Text("1. Általános rendelkezések")
+                                .font(.custom("Jellee", size: 16))
+                                .id("Általános")
+                            Text("A jelen Szabályzatban nem szabályozott kérdésekre, valamint jelen Szabályzat értelmezésére a magyar jog az irányadó, különös tekintettel a Polgári Törvénykönyvről szóló 2013. évi V. törvény („Ptk.”) és az elektronikus kereskedelmi szolgáltatások, valamint az információs társadalommal összefüggő szolgáltatások egyes kérdéseiről szóló 2001. évi CVIII. törvény vonatkozó rendelkezéseire. A vonatkozó jogszabályok kötelező rendelkezései a felekre külön kikötés nélkül is irányadók.")
+                            Text("Hatály az Általános Szerződési Feltételek (ÁSZF) módosítása")
+                            
+
+                            Rectangle()
+                                .frame(height: 2)
+                                .foregroundColor(.DesignSystem.descriptions)
+                            
+                            // 2. szakasz
+                            Text("2. Adatvédelem")
+                                .font(.custom("Jellee", size: 16))
+                                .id("Adatvédelem")
+                            Text("A Szolgáltató adatkezelésére a személyes adatok védelméről és a közérdekű adatok nyilvánosságáról szóló 1992. évi LXIII. törvény (Avtv.) irányadó. Az adatszolgáltatás önkéntes.")
+                            Text("Az adatkezelés célja a megbízási szerződésben foglalt, Adatkezelő által vállalt szolgáltatások és kötelezettségek teljesítése, jogok érvényesítése, az ügyfél, azonosítása, az Ügyféllel való kapcsolattartás és kommunikáció.")
+                            Text("További személyes adatok kezelése törvényi felhatalmazáson alapulhat, amelynek célja jogszabályi kötelezettségek teljesítése. Kezelt adatok: adószám, adóazonosító jel, TAJ szám, bankszámlaszám stb.")
+
+                            
+                            Rectangle()
+                                .frame(height: 2)
+                                .foregroundColor(.DesignSystem.descriptions)
+                            
+                            // 2. szakasz
+                            Text("3. Korhatárszabályok")
+                                .font(.custom("Jellee", size: 16))
+                                .id("Korhatárszabályok")
+                            Text("A SkillTrade szolgáltatásainak használatához a minimum életkor 18 év. Munkavállalóink felelősséget vállalnak saját magukért.")
+                            
+
+
+                            Rectangle()
+                                .frame(height: 2)
+                                .foregroundColor(.DesignSystem.descriptions)
+                        }
+                        .padding(.bottom, 2)
+                        .font(.custom("Lexend", size: 16))
+                        .padding()
+                    }
+                }
+                .padding()
+            }
+//            .toolbar {
+//                ToolbarItem(placement: .topBarTrailing) {
+//                    Button("Bezárás") { dismiss() }
+//                        .font(.custom("Lexend", size: 17))
+//                        .foregroundStyle(
+//                            LinearGradient(
+//                                colors: [.red, .blue],
+//                                startPoint: .leading,
+//                                endPoint: .trailing
+//                            )
+//                        )
+//                }
+//            }
         }
     }
+}
 
     // MARK: - Preview Provider
     struct RegisterView_Previews: PreviewProvider {
         static var previews: some View {
             RegisterView()
+            TermsView()
         }
     }

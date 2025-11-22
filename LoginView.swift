@@ -90,7 +90,7 @@ class LoginViewModel: ObservableObject {
             
             await MainActor.run {
                 if !isServerAvailable {
-                    self.error = "A szerver jelenleg nem elérhető. Kérjük, próbáld később."
+                    self.error = "A szerver jelenleg nem érhető el. Kérjük, próbáld újra később."
                     self.isLoading = false
                     return
                 }
@@ -101,6 +101,7 @@ class LoginViewModel: ObservableObject {
         }
     }
     
+    // LoginView.swift - Update the login function in ViewModel
     private func continueLogin() {
         guard !identifier.isEmpty, !password.isEmpty else {
             error = "Kérjük, töltsd ki az összes mezőt!"
@@ -116,8 +117,16 @@ class LoginViewModel: ObservableObject {
                 
                 if success {
                     print("✅ Bejelentkezés sikeres a szerveren")
+                    
+                    // Force token save and sync
                     UserDefaults.standard.set(true, forKey: "isLoggedIn")
                     UserDefaults.standard.set(self?.identifier, forKey: "userEmail")
+                    UserDefaults.standard.synchronize()
+                    
+                    // Verify token was saved
+                    let savedToken = UserDefaults.standard.string(forKey: "authToken")
+                    print("💾 TOKEN VERIFICATION - Saved: \(savedToken != nil), Length: \(savedToken?.count ?? 0)")
+                    
                     self?.isLoggedIn = true
                 } else {
                     print("❌ Bejelentkezés sikertelen a szerveren")
@@ -217,7 +226,8 @@ struct LoginView: View {
                         .multilineTextAlignment(.center)
                     
                     Text("Jelentkezz be!")
-                        .font(.custom("Jellee", size: 26))
+                        .font(.custom("Jellee", size: 36))
+                        .foregroundStyle(LinearGradient(gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]), startPoint: .leading, endPoint: .trailing))
                         .multilineTextAlignment(.center)
                     
                     // Input section
@@ -230,6 +240,10 @@ struct LoginView: View {
                             .textContentType(.emailAddress)
                             .autocapitalization(.none)
                             .autocorrectionDisabled(true)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20)
+                                    .stroke(LinearGradient(gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]), startPoint: .leading, endPoint: .trailing), lineWidth: 5))
+                            .cornerRadius(20)
                         
                         SecureField("Jelszó", text: $viewModel.password)
                             .foregroundStyle(.white)
@@ -238,6 +252,10 @@ struct LoginView: View {
                             .font(.custom("Jellee", size: 18))
                             .autocapitalization(.none)
                             .autocorrectionDisabled(true)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20)
+                                    .stroke(LinearGradient(gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]), startPoint: .leading, endPoint: .trailing), lineWidth: 5))
+                            .cornerRadius(20)
                         
                         // Hibaüzenet
                         if let error = viewModel.error {
@@ -271,16 +289,53 @@ struct LoginView: View {
                         .buttonStyle(ModernButtonStyle(backgroundColor: .DesignSystem.fokekszin, foregroundColor: .black))
                         .disabled(viewModel.isLoading)
                         
-                        GoogleSignInButton {
-                            print("🎯 Google bejelentkezés gomb megnyomva")
-                            viewModel.signInWithGoogle()
-                        }
-                            .frame(height: 60)
-                            .cornerRadius(20)
-                            .shadow(color: Color.black.opacity(0.05), radius: 5, y: 2)
+//                        Button(action: {
+//                            print("🎯 Bejelentkezés gomb megnyomva")
+//                            viewModel.signInWithGoogle()
+//                        }) {
+//                            Group {
+//                                if viewModel.isLoading {
+//                                    ProgressView()
+//                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+//                                        .scaleEffect(1.2)
+//                                } else {
+//                                    Text("Bejelentkezés Gooogle-lel")
+//                                        .font(.custom("Lexend", size: 20))
+//                                        .foregroundColor(Color.white)
+//                                }
+//                            }
+//                        }
+//                        .frame(maxWidth: .infinity)
+//                        .padding(.vertical, 16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 20)
+                                .fill(LinearGradient(
+                                    gradient: Gradient(colors: [
+                                        Color(red: 0.25, green: 0.52, blue: 0.95), // Google Kék
+                                        Color(red: 0.91, green: 0.30, blue: 0.24), // Google Piros
+                                        Color(red: 0.98, green: 0.73, blue: 0.16), // Google Sárga
+                                        Color(red: 0.20, green: 0.81, blue: 0.36)  // Google Zöld
+                                    ]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ))
+                                .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+                        )
+                        .foregroundColor(.white)
+                        .disabled(viewModel.isLoading)
+                        
+                        SocialLoginView()
+
+                        
+//                        GoogleSignInButton {
+//                            print("🎯 Google bejelentkezés gomb megnyomva")
+//                            viewModel.signInWithGoogle()
+//                        }
+//                            .frame(height: 60)
+//                            .cornerRadius(20)
+//                            .shadow(color: Color.black.opacity(0.05), radius: 5, y: 2)
                         
                         Button(action: {
-                            print("🎯 Regisztráció gomb megnyomva")
                             showRegister = true
                         }) {
                             Text("Nincs még fiókod? Regisztrálj!")

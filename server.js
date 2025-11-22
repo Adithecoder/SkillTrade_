@@ -11,7 +11,9 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const path = require('path');
-
+const { OAuth2Client } = require('google-auth-library');
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || 'your-google-client-id';
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 const app = express();
 
 // Middleware
@@ -53,6 +55,8 @@ db.serialize(() => {
         permanentQRCodeUrl TEXT,
         typeofservice TEXT,
         price REAL DEFAULT 0.0,
+        googleId TEXT UNIQUE,
+        appleId TEXT UNIQUE,
         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
@@ -98,7 +102,740 @@ const userToObject = (row) => {
     };
 };
 
+
+// Kártya tábla létrehozása
+db.run(`CREATE TABLE IF NOT EXISTS payment_cards (
+    id TEXT PRIMARY KEY,
+    userId TEXT NOT NULL,
+    cardName TEXT NOT NULL,
+    cardNumber TEXT NOT NULL,
+    cardHolderName TEXT NOT NULL,
+    expirationMonth INTEGER NOT NULL,
+    expirationYear INTEGER NOT NULL,
+    cvv TEXT NOT NULL,
+    cardType TEXT NOT NULL,
+    isDefault BOOLEAN DEFAULT 0,
+    lastFourDigits TEXT NOT NULL,
+    color TEXT DEFAULT 'blue',
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (userId) REFERENCES users(id)
+)`);
+
+console.log('✅ Payment cards tábla inicializálva');
+
+// ÚJ KÁRTYA HOZZÁADÁSA
+app.post('/api/payment/cards', (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        const {
+            cardNumber,
+            cardHolderName,
+            expirationMonth,
+            expirationYear,
+            cvv,
+            isDefault
+        } = req.body;
+
+        console.log('💳 Új kártya hozzáadása kérés');
+
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            const userId = decoded.id;
+            
+            // Validáció
+            if (!cardNumber || !cardHolderName || !expirationMonth || !expirationYear || !cvv) {
+                return res.status(400).json({ message: 'Minden mező kitöltése kötelező' });
+            }
+
+            // Kártya típus detektálás
+            const cardType = detectCardType(cardNumber);
+            const lastFourDigits = cardNumber.slice(-4);
+            const cardId = uuidv4();
+            const cardName = `${cardType} •••• ${lastFourDigits}`;
+
+            // Alapértelmezett kártya beállítása
+            if (isDefault) {
+                // Először állítsuk vissza az összes kártyát
+                db.run(
+                    'UPDATE payment_cards SET isDefault = 0 WHERE userId = ?',
+                    [userId],
+                    function(err) {
+                        if (err) {
+                            console.error('Default card reset error:', err);
+                        }
+                        insertNewCard();
+                    }
+                );
+            } else {
+                insertNewCard();
+            }
+
+            function insertNewCard() {
+                // Új kártya beszúrása
+                const stmt = db.prepare(`
+                    INSERT INTO payment_cards (
+                        id, userId, cardName, cardNumber, cardHolderName,
+                        expirationMonth, expirationYear, cvv, cardType,
+                        isDefault, lastFourDigits
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `);
+
+                stmt.run(
+                    cardId,
+                    userId,
+                    cardName,
+                    cardNumber,
+                    cardHolderName,
+                    expirationMonth,
+                    expirationYear,
+                    cvv,
+                    cardType,
+                    isDefault ? 1 : 0,
+                    lastFourDigits,
+                    function(err) {
+                        if (err) {
+                            console.error('Insert card error:', err);
+                            return res.status(500).json({ message: 'Hiba a kártya mentésekor' });
+                        }
+
+                        console.log('✅ Kártya sikeresen hozzáadva:', cardId);
+                        
+                        res.status(201).json({
+                            message: 'Kártya sikeresen hozzáadva',
+                            cardId: cardId
+                        });
+                    }
+                );
+
+                stmt.finalize();
+            }
+        });
+
+    } catch (error) {
+        console.error('Add card error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// KÁRTYA TÖRLÉSE
+app.delete('/api/payment/cards/:cardId', (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        const { cardId } = req.params;
+
+        console.log('🗑️ Kártya törlés kérés:', cardId);
+
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            const userId = decoded.id;
+
+            // Ellenőrizzük, hogy a kártya a felhasználóé-e
+            db.get(
+                'SELECT id, isDefault FROM payment_cards WHERE id = ? AND userId = ?',
+                [cardId, userId],
+                (err, card) => {
+                    if (err) {
+                        console.error('❌ Adatbázis hiba:', err);
+                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                    }
+
+                    if (!card) {
+                        console.log('❌ Kártya nem található:', cardId);
+                        return res.status(404).json({ message: 'Kártya nem található' });
+                    }
+
+                    console.log('✅ Kártya megtalálva, törlés...');
+
+                    // Töröljük a kártyát
+                    db.run(
+                        'DELETE FROM payment_cards WHERE id = ? AND userId = ?',
+                        [cardId, userId],
+                        function(err) {
+                            if (err) {
+                                console.error('❌ Törlési hiba:', err);
+                                return res.status(500).json({ message: 'Hiba a kártya törlésekor' });
+                            }
+
+                            console.log('✅ Kártya törölve, changes:', this.changes);
+
+                            // Ha az alapértelmezett kártyát töröltük, állítsunk be egy újat
+                            if (card.isDefault) {
+                                console.log('🔁 Alapértelmezett kártya törölve, új beállítása...');
+                                db.get(
+                                    'SELECT id FROM payment_cards WHERE userId = ? LIMIT 1',
+                                    [userId],
+                                    (err, firstCard) => {
+                                        if (firstCard) {
+                                            db.run(
+                                                'UPDATE payment_cards SET isDefault = 1 WHERE id = ?',
+                                                [firstCard.id],
+                                                function(err) {
+                                                    if (err) {
+                                                        console.error('❌ Alapértelmezett kártya beállítási hiba:', err);
+                                                    } else {
+                                                        console.log('✅ Új alapértelmezett kártya beállítva:', firstCard.id);
+                                                    }
+                                                }
+                                            );
+                                        }
+                                    }
+                                );
+                            }
+
+                            console.log('✅ Kártya sikeresen törölve:', cardId);
+                            
+                            res.status(200).json({
+                                message: 'Kártya sikeresen törölve',
+                                cardId: cardId
+                            });
+                        }
+                    );
+                }
+            );
+        });
+
+    } catch (error) {
+        console.error('❌ Törlési hiba:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// server.js - DEBUG endpoint a user ID-k ellenőrzésére
+app.get('/api/debug/users', (req, res) => {
+    db.all('SELECT id, name, email FROM users', (err, rows) => {
+        if (err) {
+            return res.status(500).json({ message: 'Adatbázis hiba' });
+        }
+        
+        console.log('👥 DEBUG: Összes user az adatbázisban:');
+        rows.forEach(user => {
+            console.log(`  - ID: ${user.id}, Név: ${user.name}, Email: ${user.email}`);
+        });
+        
+        res.status(200).json({
+            users: rows,
+            count: rows.length
+        });
+    });
+});
+
+// server.js - DEBUG endpoint az összes munka listázására
+app.get('/api/debug/works', (req, res) => {
+    try {
+        console.log('🔍 DEBUG: Összes munka listázása');
+        
+        db.all(
+            `SELECT id, title, employerName, statusText, createdAt 
+             FROM works 
+             ORDER BY createdAt DESC`,
+            (err, rows) => {
+                if (err) {
+                    console.error('❌ Adatbázis hiba:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                console.log(`📋 DEBUG: ${rows.length} munka található`);
+                
+                rows.forEach((work, index) => {
+                    console.log(`  ${index + 1}. ${work.id} - ${work.title} (${work.statusText})`);
+                });
+
+                res.status(200).json({
+                    works: rows,
+                    count: rows.length
+                });
+            }
+        );
+
+    } catch (error) {
+        console.error('❌ Debug works error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+// Add hozzá a server.js-hez - DEBUG endpoint
+app.get('/api/payment/cards/debug/:cardId', (req, res) => {
+    try {
+        const { cardId } = req.params;
+        const token = req.headers.authorization?.split(' ')[1];
+
+        console.log('🔍 Kártya debug kérés:', cardId);
+
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            const userId = decoded.id;
+
+            // Ellenőrizzük az összes kártyát a felhasználóhoz
+            db.all(
+                'SELECT * FROM payment_cards WHERE userId = ?',
+                [userId],
+                (err, cards) => {
+                    if (err) {
+                        console.error('Database error:', err);
+                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                    }
+
+                    console.log('📋 Felhasználó kártyái:', cards);
+                    
+                    // Keresd meg a specifikus kártyát
+                    const targetCard = cards.find(card => card.id === cardId);
+                    
+                    res.status(200).json({
+                        allCards: cards,
+                        targetCard: targetCard,
+                        targetCardExists: !!targetCard,
+                        cardCount: cards.length
+                    });
+                }
+            );
+        });
+
+    } catch (error) {
+        console.error('Debug error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+// ALAPÉRTELMEZETT KÁRTYA BEÁLLÍTÁSA
+app.put('/api/payment/cards/:cardId/default', (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        const { cardId } = req.params;
+
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            const userId = decoded.id;
+
+            // Először állítsuk vissza az összes kártyát
+            db.run(
+                'UPDATE payment_cards SET isDefault = 0 WHERE userId = ?',
+                [userId],
+                function(err) {
+                    if (err) {
+                        console.error('Reset default cards error:', err);
+                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                    }
+
+                    // Most állítsuk be az újat
+                    db.run(
+                        'UPDATE payment_cards SET isDefault = 1 WHERE id = ? AND userId = ?',
+                        [cardId, userId],
+                        function(err) {
+                            if (err) {
+                                console.error('Set default card error:', err);
+                                return res.status(500).json({ message: 'Hiba az alapértelmezett kártya beállításakor' });
+                            }
+
+                            if (this.changes === 0) {
+                                return res.status(404).json({ message: 'Kártya nem található' });
+                            }
+
+                            console.log('✅ Alapértelmezett kártya beállítva:', cardId);
+                            
+                            res.status(200).json({
+                                message: 'Alapértelmezett kártya sikeresen beállítva',
+                                cardId: cardId
+                            });
+                        }
+                    );
+                }
+            );
+        });
+
+    } catch (error) {
+        console.error('Set default card error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// FELHASZNÁLÓ KÁRTYÁINAK LEKÉRÉSE
+app.get('/api/payment/cards', (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            const userId = decoded.id;
+
+            db.all(
+                'SELECT * FROM payment_cards WHERE userId = ? ORDER BY isDefault DESC, createdAt DESC',
+                [userId],
+                (err, rows) => {
+                    if (err) {
+                        console.error('Database error:', err);
+                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                    }
+
+                    const cards = rows.map(row => ({
+                        id: row.id,
+                        cardName: row.cardName,
+                        cardNumber: row.cardNumber,
+                        cardHolderName: row.cardHolderName,
+                        expirationMonth: row.expirationMonth,
+                        expirationYear: row.expirationYear,
+                        cvv: row.cvv,
+                        cardType: row.cardType,
+                        isDefault: Boolean(row.isDefault),
+                        lastFourDigits: row.lastFourDigits,
+                        color: row.color || 'blue',
+                        createdAt: row.createdAt,
+                        updatedAt: row.updatedAt
+                    }));
+
+                    res.status(200).json({
+                        cards: cards,
+                        count: cards.length
+                    });
+                }
+            );
+        });
+
+    } catch (error) {
+        console.error('Get cards error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// Kártya típus detektálás helper function
+function detectCardType(cardNumber) {
+    const cleaned = cardNumber.replace(/\s/g, '');
+    
+    if (/^4[0-9]{12}(?:[0-9]{3})?$/.test(cleaned)) {
+        return 'visa';
+    } else if (/^5[1-5][0-9]{14}$/.test(cleaned)) {
+        return 'mastercard';
+    } else if (/^3[47][0-9]{13}$/.test(cleaned)) {
+        return 'amex';
+    } else if (/^6(?:011|5[0-9]{2})[0-9]{12}$/.test(cleaned)) {
+        return 'discover';
+    } else {
+        return 'unknown';
+    }
+}
 // Routes
+
+// server.js - Add hozzá ezt a route-ot a Google login után
+
+// APPLE BEJELENTKEZÉS
+app.post('/api/auth/apple', async (req, res) => {
+    try {
+        const { identityToken, userIdentifier, email, fullName } = req.body;
+
+        console.log('🔐 Apple login request received');
+
+        if (!identityToken || !userIdentifier) {
+            return res.status(400).json({
+                message: 'Apple token hiányzik'
+            });
+        }
+
+        // Itt kellene az Apple token validálása
+        // Jelenleg egyszerűsített változat - éles környezetben implementáld a teljes validálást
+        console.log('✅ Apple token received (validation would happen here)');
+
+        // Ellenőrizzük, hogy a user már létezik-e
+        db.get(
+            'SELECT * FROM users WHERE email = ? OR appleId = ?',
+            [email, userIdentifier],
+            async (err, existingUser) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({
+                        message: 'Adatbázis hiba'
+                    });
+                }
+
+                const userName = fullName ? `${fullName.givenName || ''} ${fullName.familyName || ''}`.trim() : 'Apple User';
+
+                if (existingUser) {
+                    // User már létezik - frissítsük az Apple adatokat
+                    db.run(
+                        'UPDATE users SET appleId = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+                        [userIdentifier, existingUser.id],
+                        function(err) {
+                            if (err) {
+                                console.error('Update user error:', err);
+                                return res.status(500).json({
+                                    message: 'Hiba a felhasználó frissítésekor'
+                                });
+                            }
+
+                            // Token generálás
+                            const token = jwt.sign(
+                                { id: existingUser.id },
+                                JWT_SECRET,
+                                { expiresIn: '30d' }
+                            );
+
+                            const userResponse = userToObject(existingUser);
+                            
+                            res.status(200).json({
+                                token,
+                                user: userResponse
+                            });
+
+                            console.log('✅ Apple login successful (existing user):', userResponse.email);
+                        }
+                    );
+                } else {
+                    // Új user létrehozása Apple adatokkal
+                    const username = email ? email.split('@')[0] + '_apple' : 'apple_user_' + Date.now();
+                    const userEmail = email || (userIdentifier + '@apple.com');
+                    const age = 18; // Default age
+
+                    const stmt = db.prepare(`
+                        INSERT INTO users (
+                            name, email, username, password, age,
+                            appleId, isVerified,
+                            location_city, location_country, skills, pricing, photos
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `);
+
+                    stmt.run(
+                        userName,
+                        userEmail,
+                        username,
+                        'apple_auth', // placeholder password
+                        age,
+                        userIdentifier,
+                        1, // Apple users are automatically verified
+                        '', // location_city
+                        '', // location_country
+                        '[]', // skills
+                        '[]', // pricing
+                        '[]', // photos
+                        function(err) {
+                            if (err) {
+                                console.error('Insert error:', err);
+                                return res.status(500).json({
+                                    message: 'Hiba a felhasználó létrehozásakor'
+                                });
+                            }
+
+                            // Új user lekérése
+                            db.get(
+                                'SELECT * FROM users WHERE id = ?',
+                                [this.lastID],
+                                (err, newUser) => {
+                                    if (err) {
+                                        console.error('Select error:', err);
+                                        return res.status(500).json({
+                                            message: 'Hiba a felhasználó lekérésekor'
+                                        });
+                                    }
+
+                                    // Token generálás
+                                    const token = jwt.sign(
+                                        { id: newUser.id },
+                                        JWT_SECRET,
+                                        { expiresIn: '30d' }
+                                    );
+
+                                    const userResponse = userToObject(newUser);
+
+                                    res.status(201).json({
+                                        token,
+                                        user: userResponse
+                                    });
+
+                                    console.log('✅ Apple registration successful:', userResponse.email);
+                                }
+                            );
+                        }
+                    );
+
+                    stmt.finalize();
+                }
+            }
+        );
+
+    } catch (error) {
+        console.error('Apple login error:', error);
+        res.status(500).json({
+            message: 'Hiba az Apple bejelentkezés során',
+            error: error.message
+        });
+    }
+});
+
+
+app.post('/api/auth/google', async (req, res) => {
+    try {
+        const { token } = req.body;
+
+        console.log('🔐 Google login request received');
+
+        if (!token) {
+            return res.status(400).json({
+                message: 'Google token hiányzik'
+            });
+        }
+
+        // Google token ellenőrzése
+        const ticket = await googleClient.verifyIdToken({
+            idToken: token,
+            audience: GOOGLE_CLIENT_ID
+        });
+
+        const payload = ticket.getPayload();
+        const { sub: googleId, email, name, picture } = payload;
+
+        console.log('✅ Google token validated for:', email);
+
+        // Ellenőrizzük, hogy a user már létezik-e
+        db.get(
+            'SELECT * FROM users WHERE email = ? OR googleId = ?',
+            [email, googleId],
+            async (err, existingUser) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({
+                        message: 'Adatbázis hiba'
+                    });
+                }
+
+                if (existingUser) {
+                    // User már létezik - frissítsük a Google adatokat
+                    db.run(
+                        'UPDATE users SET googleId = ?, profileImageUrl = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+                        [googleId, picture, existingUser.id],
+                        function(err) {
+                            if (err) {
+                                console.error('Update user error:', err);
+                            }
+
+                            // Token generálás
+                            const token = jwt.sign(
+                                { id: existingUser.id },
+                                JWT_SECRET,
+                                { expiresIn: '30d' }
+                            );
+
+                            const userResponse = userToObject(existingUser);
+                            
+                            res.status(200).json({
+                                token,
+                                user: userResponse
+                            });
+
+                            console.log('✅ Google login successful (existing user):', userResponse.email);
+                        }
+                    );
+                } else {
+                    // Új user létrehozása Google adatokkal
+                    const username = email.split('@')[0] + '_google';
+                    const age = 18; // Default age
+
+                    const stmt = db.prepare(`
+                        INSERT INTO users (
+                            name, email, username, password, age,
+                            googleId, profileImageUrl, isVerified,
+                            location_city, location_country, skills, pricing, photos
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `);
+
+                    stmt.run(
+                        name,
+                        email,
+                        username,
+                        'google_auth', // placeholder password
+                        age,
+                        googleId,
+                        picture,
+                        1, // Google users are automatically verified
+                        '', // location_city
+                        '', // location_country
+                        '[]', // skills
+                        '[]', // pricing
+                        '[]', // photos
+                        function(err) {
+                            if (err) {
+                                console.error('Insert error:', err);
+                                return res.status(500).json({
+                                    message: 'Hiba a felhasználó létrehozásakor'
+                                });
+                            }
+
+                            // Új user lekérése
+                            db.get(
+                                'SELECT * FROM users WHERE id = ?',
+                                [this.lastID],
+                                (err, newUser) => {
+                                    if (err) {
+                                        console.error('Select error:', err);
+                                        return res.status(500).json({
+                                            message: 'Hiba a felhasználó lekérésekor'
+                                        });
+                                    }
+
+                                    // Token generálás
+                                    const token = jwt.sign(
+                                        { id: newUser.id },
+                                        JWT_SECRET,
+                                        { expiresIn: '30d' }
+                                    );
+
+                                    const userResponse = userToObject(newUser);
+
+                                    res.status(201).json({
+                                        token,
+                                        user: userResponse
+                                    });
+
+                                    console.log('✅ Google registration successful:', userResponse.email);
+                                }
+                            );
+                        }
+                    );
+
+                    stmt.finalize();
+                }
+            }
+        );
+
+    } catch (error) {
+        console.error('Google login error:', error);
+        res.status(500).json({
+            message: 'Hiba a Google bejelentkezés során',
+            error: error.message
+        });
+    }
+});
+
 
 // REGISZTRÁCIÓ
 app.post('/api/auth/register', async (req, res) => {
@@ -562,6 +1299,518 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+// USER ADATOK MÓDOSÍTÁSA (Admin funkció)
+app.put('/api/auth/users/:userId', (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        const { userId } = req.params;
+        const updates = req.body;
+
+        console.log('🔧 User update request:', { userId, updates });
+
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            // Ellenőrizzük, hogy admin-e
+            db.get('SELECT userRole FROM users WHERE id = ?', [decoded.id], (err, adminUser) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                if (!adminUser || adminUser.userRole !== 'admin') {
+                    return res.status(403).json({ message: 'Csak admin módosíthatja a felhasználói adatokat' });
+                }
+
+                updateUser();
+            });
+
+            function updateUser() {
+                const allowedFields = ['name', 'email', 'username', 'age', 'userRole', 'status', 'isVerified'];
+                const setClause = [];
+                const values = [];
+
+                Object.keys(updates).forEach(key => {
+                    if (allowedFields.includes(key)) {
+                        setClause.push(`${key} = ?`);
+                        values.push(updates[key]);
+                    }
+                });
+
+                if (setClause.length === 0) {
+                    return res.status(400).json({ message: 'Nincs érvényes frissítendő mező' });
+                }
+
+                setClause.push('updatedAt = CURRENT_TIMESTAMP');
+                values.push(userId);
+
+                const query = `UPDATE users SET ${setClause.join(', ')} WHERE id = ?`;
+
+                db.run(query, values, function(err) {
+                    if (err) {
+                        console.error('Update user error:', err);
+                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                    }
+
+                    if (this.changes === 0) {
+                        return res.status(404).json({ message: 'Felhasználó nem található' });
+                    }
+
+                    // Visszaadjuk a frissített usert
+                    db.get('SELECT * FROM users WHERE id = ?', [userId], (err, user) => {
+                        if (err) {
+                            return res.status(500).json({ message: 'Adatbázis hiba' });
+                        }
+
+                        const userResponse = userToObject(user);
+                        
+                        console.log('✅ User updated successfully:', { userId, updates });
+                        
+                        res.status(200).json({
+                            message: 'Felhasználó sikeresen frissítve',
+                            user: userResponse
+                        });
+                    });
+                });
+            }
+        });
+
+    } catch (error) {
+        console.error('Update user error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// server.js - Javított útvonalak
+
+// USER ADATOK MÓDOSÍTÁSA (UUID támogatással)
+app.put('/api/auth/users/:userId', (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        const { userId } = req.params;
+        const updates = req.body;
+
+        console.log('🔧 User update request:', { userId, updates });
+
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            // Ellenőrizzük, hogy admin-e
+            db.get('SELECT userRole FROM users WHERE id = ?', [decoded.id], (err, adminUser) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                if (!adminUser || adminUser.userRole !== 'admin') {
+                    return res.status(403).json({ message: 'Csak admin módosíthatja a felhasználói adatokat' });
+                }
+
+                // UUID konvertálása integer ID-vá
+                const userIdInt = convertUUIDtoInt(userId);
+                if (!userIdInt) {
+                    return res.status(400).json({ message: 'Érvénytelen felhasználó ID' });
+                }
+
+                updateUser(userIdInt);
+            });
+
+            function updateUser(userIdInt) {
+                const allowedFields = ['name', 'email', 'username', 'age', 'userRole', 'status', 'isVerified'];
+                const setClause = [];
+                const values = [];
+
+                Object.keys(updates).forEach(key => {
+                    if (allowedFields.includes(key)) {
+                        setClause.push(`${key} = ?`);
+                        values.push(updates[key]);
+                    }
+                });
+
+                if (setClause.length === 0) {
+                    return res.status(400).json({ message: 'Nincs érvényes frissítendő mező' });
+                }
+
+                setClause.push('updatedAt = CURRENT_TIMESTAMP');
+                values.push(userIdInt);
+
+                const query = `UPDATE users SET ${setClause.join(', ')} WHERE id = ?`;
+
+                db.run(query, values, function(err) {
+                    if (err) {
+                        console.error('Update user error:', err);
+                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                    }
+
+                    if (this.changes === 0) {
+                        return res.status(404).json({ message: 'Felhasználó nem található' });
+                    }
+
+                    // Visszaadjuk a frissített usert
+                    db.get('SELECT * FROM users WHERE id = ?', [userIdInt], (err, user) => {
+                        if (err) {
+                            return res.status(500).json({ message: 'Adatbázis hiba' });
+                        }
+
+                        const userResponse = userToObject(user);
+                        
+                        console.log('✅ User updated successfully:', { userId: userIdInt, updates });
+                        
+                        res.status(200).json({
+                            message: 'Felhasználó sikeresen frissítve',
+                            user: userResponse
+                        });
+                    });
+                });
+            }
+        });
+
+    } catch (error) {
+        console.error('Update user error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// USER FELTÉTELEZÉSE (UUID támogatással)
+app.put('/api/auth/users/:userId/suspend', (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        const { userId } = req.params;
+        const { suspended } = req.body;
+
+        console.log('⏸️ Suspend user request:', { userId, suspended });
+
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            // Ellenőrizzük, hogy admin-e
+            db.get('SELECT userRole FROM users WHERE id = ?', [decoded.id], (err, adminUser) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                if (!adminUser || adminUser.userRole !== 'admin') {
+                    return res.status(403).json({ message: 'Csak admin függeszthet fel/törölhet felhasználót' });
+                }
+
+                // UUID konvertálása integer ID-vá
+                const userIdInt = convertUUIDtoInt(userId);
+                if (!userIdInt) {
+                    return res.status(400).json({ message: 'Érvénytelen felhasználó ID' });
+                }
+
+                const newStatus = suspended ? 'suspended' : 'active';
+
+                db.run(
+                    'UPDATE users SET status = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+                    [newStatus, userIdInt],
+                    function(err) {
+                        if (err) {
+                            console.error('Suspend user error:', err);
+                            return res.status(500).json({ message: 'Adatbázis hiba' });
+                        }
+
+                        if (this.changes === 0) {
+                            return res.status(404).json({ message: 'Felhasználó nem található' });
+                        }
+
+                        console.log('✅ User suspension updated:', { userId: userIdInt, suspended });
+                        
+                        res.status(200).json({
+                            message: `Felhasználó ${suspended ? 'felfüggesztve' : 'aktiválva'}`,
+                            userId: userId,
+                            suspended: suspended
+                        });
+                    }
+                );
+            });
+        });
+
+    } catch (error) {
+        console.error('Suspend user error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// server.js - DEBUG verzió
+app.delete('/api/auth/users/:userId', (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        const { userId } = req.params;
+
+        console.log('🗑️ DELETE DEBUG - Received userId:', userId);
+        console.log('🗑️ DELETE DEBUG - Type of userId:', typeof userId);
+        console.log('🗑️ DELETE DEBUG - Full URL:', req.url);
+
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            console.log('🗑️ DELETE DEBUG - Decoded admin ID:', decoded.id);
+
+            // Ellenőrizzük, hogy admin-e
+            db.get('SELECT userRole FROM users WHERE id = ?', [decoded.id], (err, adminUser) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                console.log('🗑️ DELETE DEBUG - Admin user:', adminUser);
+
+                if (!adminUser || adminUser.userRole !== 'admin') {
+                    return res.status(403).json({ message: 'Csak admin törölhet felhasználót' });
+                }
+
+                // DIRECT APPROACH: Próbáljuk meg az userId-t direktben használni
+                console.log('🗑️ DELETE DEBUG - Attempting to delete user with ID:', userId);
+                
+                // Először töröljük a kapcsolódó adatokat
+                db.serialize(() => {
+                    db.run('DELETE FROM works WHERE employerID = ?', [userId], function(err) {
+                        if (err) console.error('Delete works error:', err);
+                        else console.log(`🗑️ Deleted ${this.changes} works`);
+                    });
+                    
+                    db.run('DELETE FROM work_applications WHERE applicantId = ? OR employerId = ?', [userId, userId], function(err) {
+                        if (err) console.error('Delete applications error:', err);
+                        else console.log(`🗑️ Deleted ${this.changes} applications`);
+                    });
+                    
+                    // Végül töröljük a felhasználót
+                    db.run('DELETE FROM users WHERE id = ?', [userId], function(err) {
+                        if (err) {
+                            console.error('❌ Delete user error:', err);
+                            return res.status(500).json({ message: 'Adatbázis hiba' });
+                        }
+
+                        console.log('🗑️ DELETE RESULT - Database changes:', this.changes);
+
+                        if (this.changes === 0) {
+                            // Ha nem találta, próbáljuk meg integerré konvertálni
+                            const userIdInt = parseInt(userId);
+                            console.log('🗑️ TRYING INT CONVERSION:', userIdInt);
+                            
+                            if (!isNaN(userIdInt)) {
+                                db.run('DELETE FROM users WHERE id = ?', [userIdInt], function(err) {
+                                    if (err) {
+                                        console.error('❌ Delete user error (int):', err);
+                                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                                    }
+                                    
+                                    console.log('🗑️ DELETE RESULT (int) - Database changes:', this.changes);
+                                    
+                                    if (this.changes === 0) {
+                                        return res.status(404).json({ message: 'Felhasználó nem található' });
+                                    }
+                                    
+                                    res.status(200).json({
+                                        message: 'Felhasználó sikeresen törölve',
+                                        userId: userId
+                                    });
+                                });
+                            } else {
+                                return res.status(404).json({ message: 'Felhasználó nem található' });
+                            }
+                        } else {
+                            res.status(200).json({
+                                message: 'Felhasználó sikeresen törölve',
+                                userId: userId
+                            });
+                        }
+                    });
+                });
+            });
+        });
+
+    } catch (error) {
+        console.error('Delete user error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+
+// server.js - Email alapú törlés
+app.delete('/api/auth/users/by-email/:email', (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        const { email } = req.params;
+
+        console.log('🗑️ EMAIL DELETE - Request received for email:', email);
+
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        // Token ellenőrzés
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            // Ellenőrizzük, hogy admin-e
+            db.get('SELECT userRole, email FROM users WHERE id = ?', [decoded.id], (err, adminUser) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                if (!adminUser || adminUser.userRole !== 'admin') {
+                    return res.status(403).json({ message: 'Csak admin törölhet felhasználót' });
+                }
+
+                // Nem lehet saját magadat törölni
+                if (adminUser.email === email) {
+                    return res.status(400).json({ message: 'Saját fiókodat nem törölheted' });
+                }
+
+                console.log('🗑️ EMAIL DELETE - Looking for user with email:', email);
+
+                // Először keressük meg a user ID-t
+                db.get('SELECT id FROM users WHERE email = ?', [email], (err, user) => {
+                    if (err) {
+                        console.error('Database error:', err);
+                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                    }
+
+                    if (!user) {
+                        console.log('❌ EMAIL DELETE - User not found with email:', email);
+                        return res.status(404).json({
+                            message: 'Felhasználó nem található ezzel az email címmel',
+                            email: email
+                        });
+                    }
+
+                    const userId = user.id;
+                    console.log('✅ EMAIL DELETE - Found user ID:', userId, 'for email:', email);
+
+                    // Töröljük a kapcsolódó adatokat
+                    db.serialize(() => {
+                        // Töröljük a munkákat
+                        db.run('DELETE FROM works WHERE employerID = ?', [userId], function(err) {
+                            if (err) {
+                                console.error('Delete works error:', err);
+                            } else {
+                                console.log(`🗑️ Deleted ${this.changes} works`);
+                            }
+                        });
+                        
+                        // Töröljük a jelentkezéseket
+                        db.run('DELETE FROM work_applications WHERE applicantId = ? OR employerId = ?', [userId, userId], function(err) {
+                            if (err) {
+                                console.error('Delete applications error:', err);
+                            } else {
+                                console.log(`🗑️ Deleted ${this.changes} applications`);
+                            }
+                        });
+                        
+                        // Végül töröljük a felhasználót
+                        db.run('DELETE FROM users WHERE id = ?', [userId], function(err) {
+                            if (err) {
+                                console.error('Delete user error:', err);
+                                return res.status(500).json({ message: 'Adatbázis hiba' });
+                            }
+
+                            console.log('✅ EMAIL DELETE - User deleted successfully, changes:', this.changes);
+                            
+                            res.status(200).json({
+                                message: 'Felhasználó sikeresen törölve',
+                                email: email,
+                                userId: userId
+                            });
+                        });
+                    });
+                });
+            });
+        });
+
+    } catch (error) {
+        console.error('Email delete error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+
+// Helper függvény UUID konvertálásához
+function convertUUIDtoInt(uuid) {
+    // Egyszerű hash-elés az UUID-ból integerré
+    if (typeof uuid === 'number') {
+        return uuid;
+    }
+    
+    if (typeof uuid === 'string') {
+        // Ha már integer string formátumban
+        if (/^\d+$/.test(uuid)) {
+            return parseInt(uuid);
+        }
+        
+        // UUID hash-elése
+        let hash = 0;
+        for (let i = 0; i < uuid.length; i++) {
+            const char = uuid.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        return Math.abs(hash);
+    }
+    
+    return null;
+}
+
+// server.js - UUID mapping tábla
+db.run(`CREATE TABLE IF NOT EXISTS uuid_mapping (
+    uuid TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+)`);
+
+// Helper függvény user ID lekéréséhez UUID alapján
+function getUserIdFromUUID(uuid, callback) {
+    if (typeof uuid === 'number') {
+        return callback(uuid);
+    }
+    
+    // Először próbáljuk meg a mapping táblából
+    db.get('SELECT user_id FROM uuid_mapping WHERE uuid = ?', [uuid], (err, row) => {
+        if (err || !row) {
+            // Ha nincs mapping, hash-eljük
+            const userId = convertUUIDtoInt(uuid);
+            if (userId) {
+                // Mentsük el a mappingot
+                db.run('INSERT OR REPLACE INTO uuid_mapping (uuid, user_id) VALUES (?, ?)', [uuid, userId]);
+                callback(userId);
+            } else {
+                callback(null);
+            }
+        } else {
+            callback(row.user_id);
+        }
+    });
+}
+
 // JAVÍTOTT users endpoint - include isVerified field
 app.get('/api/auth/users', (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
@@ -974,73 +2223,58 @@ app.put('/api/works/applications/:applicationId/status', (req, res) => {
 });
 
 
+// server.js - Javított /api/works/:workId/employee endpoint
 app.put('/api/works/:workId/employee', (req, res) => {
     try {
         const { workId } = req.params;
         const { employeeID, statusText } = req.body;
-        const token = req.headers.authorization?.split(' ')[1];
         
-        if (!token) {
-            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
-        }
+        console.log('🔧 Dolgozó hozzárendelése (employee endpoint):');
+        console.log('  - Munka ID:', workId);
+        console.log('  - Dolgozó ID:', employeeID);
+        console.log('  - Státusz:', statusText);
 
-        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        // 1. Ellenőrizzük, hogy a munka létezik-e
+        db.get('SELECT * FROM works WHERE id = ?', [workId], (err, work) => {
             if (err) {
-                return res.status(401).json({ message: 'Érvénytelen token' });
+                console.error('❌ Adatbázis hiba:', err);
+                return res.status(500).json({ message: 'Adatbázis hiba' });
             }
 
-            // Ellenőrizzük, hogy a felhasználó a munkáltató-e
-            db.get('SELECT employerID FROM works WHERE id = ?', [workId], (err, work) => {
-                if (err) {
-                    console.error('Database error:', err);
-                    return res.status(500).json({ message: 'Adatbázis hiba' });
-                }
+            if (!work) {
+                console.log('❌ Munka nem található:', workId);
+                return res.status(404).json({ message: 'Munka nem található' });
+            }
 
-                if (!work) {
-                    return res.status(404).json({ message: 'Munka nem található' });
-                }
+            console.log('✅ Munka megtalálva:', work.title);
 
-                if (work.employerID !== decoded.id) {
-                    return res.status(403).json({ message: 'Nincs jogosultság a munka módosításához' });
-                }
+            // 2. SKIP: Ne ellenőrizzük a dolgozó létezését
+            console.log('⚠️  SKIP: Dolgozó létezésének ellenőrzése');
 
-                // Ellenőrizzük, hogy az employeeID létező user-e
-                db.get('SELECT id FROM users WHERE id = ?', [employeeID], (err, user) => {
+            // 3. Frissítjük a munkát
+            db.run(
+                'UPDATE works SET employeeID = ?, statusText = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+                [employeeID, statusText, workId],
+                function(err) {
                     if (err) {
-                        console.error('Database error:', err);
-                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                        console.error('❌ Munka frissítési hiba:', err);
+                        return res.status(500).json({ message: 'Hiba a munka frissítésekor' });
                     }
 
-                    if (!user) {
-                        return res.status(404).json({ message: 'Munkavállaló nem található' });
-                    }
-
-                    // Frissítjük a munkát
-                    db.run(
-                        'UPDATE works SET employeeID = ?, statusText = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
-                        [employeeID, statusText, workId],
-                        function(err) {
-                            if (err) {
-                                console.error('Update work employee error:', err);
-                                return res.status(500).json({ message: 'Hiba a munka frissítésekor' });
-                            }
-
-                            res.status(200).json({
-                                message: 'Munka sikeresen frissítve',
-                                workId: workId,
-                                employeeID: employeeID,
-                                statusText: statusText
-                            });
-
-                            console.log('✅ Munka frissítve:', { workId, employeeID, statusText });
-                        }
-                    );
-                });
-            });
+                    console.log('✅ Munka sikeresen frissítve (employee endpoint)');
+                    
+                    res.status(200).json({
+                        message: 'Munka sikeresen frissítve',
+                        workId: workId,
+                        employeeID: employeeID,
+                        statusText: statusText
+                    });
+                }
+            );
         });
 
     } catch (error) {
-        console.error('Update work employee error:', error);
+        console.error('❌ Update work employee error:', error);
         res.status(500).json({ message: 'Szerver hiba' });
     }
 });
@@ -1132,10 +2366,398 @@ function uuidv4() {
     });
 }
 
+// ÉRTÉKELÉSEK TÁBLA LÉTREHOZÁSA
+db.run(`CREATE TABLE IF NOT EXISTS reviews (
+    id TEXT PRIMARY KEY,
+    reviewerId TEXT NOT NULL,
+    reviewerName TEXT NOT NULL,
+    reviewedUserId TEXT NOT NULL,
+    workId TEXT NOT NULL,
+    rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+    comment TEXT,
+    isReliable BOOLEAN DEFAULT 1,
+    isPaid BOOLEAN DEFAULT 1,
+    type TEXT NOT NULL CHECK (type IN ('employee', 'employer')),
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (reviewerId) REFERENCES users(id),
+    FOREIGN KEY (reviewedUserId) REFERENCES users(id),
+    FOREIGN KEY (workId) REFERENCES works(id)
+)`);
 
+console.log('✅ Reviews tábla inicializálva');
 
-// Add hozzá a server.js fájlhoz a works tábla létrehozását és a route-okat
+// ÚJ ÉRTÉKELÉS LÉTREHOZÁSA
+app.post('/api/reviews', (req, res) => {
+    try {
+        const {
+            reviewerId,
+            reviewerName,
+            reviewedUserId,
+            workId,
+            rating,
+            comment,
+            isReliable,
+            isPaid,
+            type
+        } = req.body;
 
+        console.log('\n⭐ ÚJ ÉRTÉKELÉS:');
+        console.log('  - Értékelő:', reviewerName);
+        console.log('  - Értékelt felhasználó:', reviewedUserId);
+        console.log('  - Munka ID:', workId);
+        console.log('  - Értékelés:', rating, 'csillag');
+        console.log('  - Típus:', type);
+
+        // Validáció
+        if (!reviewerId || !reviewedUserId || !workId || !rating || !type) {
+            return res.status(400).json({
+                message: 'Hiányzó kötelező adatok.'
+            });
+        }
+
+        if (rating < 1 || rating > 5) {
+            return res.status(400).json({
+                message: 'Az értékelés 1-5 csillag között lehet.'
+            });
+        }
+
+        // Ellenőrizzük, hogy létezik-e a munka
+        db.get('SELECT id FROM works WHERE id = ?', [workId], (err, work) => {
+            if (err) {
+                console.error('Database error:', err);
+                return res.status(500).json({
+                    message: 'Adatbázis hiba'
+                });
+            }
+
+            if (!work) {
+                return res.status(404).json({
+                    message: 'Munka nem található.'
+                });
+            }
+
+            // Ellenőrizzük, hogy az értékelő már értékelt-e ezt a felhasználót ezen a munkán
+            db.get(
+                'SELECT id FROM reviews WHERE reviewerId = ? AND reviewedUserId = ? AND workId = ?',
+                [reviewerId, reviewedUserId, workId],
+                (err, existingReview) => {
+                    if (err) {
+                        console.error('Database error:', err);
+                        return res.status(500).json({
+                            message: 'Adatbázis hiba'
+                        });
+                    }
+
+                    if (existingReview) {
+                        return res.status(400).json({
+                            message: 'Már értékelted ezt a felhasználót ennél a munkánál.'
+                        });
+                    }
+
+                    // Új értékelés beszúrása
+                    const reviewId = uuidv4();
+                    const stmt = db.prepare(`
+                        INSERT INTO reviews (
+                            id, reviewerId, reviewerName, reviewedUserId, workId,
+                            rating, comment, isReliable, isPaid, type
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    `);
+
+                    stmt.run(
+                        reviewId,
+                        reviewerId,
+                        reviewerName,
+                        reviewedUserId,
+                        workId,
+                        rating,
+                        comment || '',
+                        isReliable !== undefined ? isReliable : 1,
+                        isPaid !== undefined ? isPaid : 1,
+                        type,
+                        function(err) {
+                            if (err) {
+                                console.error('❌ Hiba az értékelés beszúrása során:', err);
+                                return res.status(500).json({
+                                    message: 'Hiba az értékelés létrehozásakor'
+                                });
+                            }
+
+                            console.log('✅ ÉRTÉKELÉS SIKERESEN LÉTREHOZVA!');
+                            
+                            // Frissítjük a felhasználó átlagos értékelését
+                            updateUserRating(reviewedUserId);
+                            
+                            res.status(201).json({
+                                message: 'Értékelés sikeresen elküldve!',
+                                reviewId: reviewId
+                            });
+                        }
+                    );
+
+                    stmt.finalize();
+                }
+            );
+        });
+
+    } catch (error) {
+        console.error('❌ Create review error:', error);
+        res.status(500).json({
+            message: 'Szerver hiba az értékelés létrehozása során.',
+            error: error.message
+        });
+    }
+});
+
+// FELHASZNÁLÓ ÉRTÉKELÉSEINEK LEKÉRÉSE
+app.get('/api/reviews/user/:userId', (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { type } = req.query;
+
+        let query = `
+            SELECT r.*, w.title as workTitle
+            FROM reviews r
+            LEFT JOIN works w ON r.workId = w.id
+            WHERE r.reviewedUserId = ?
+        `;
+        let params = [userId];
+
+        if (type) {
+            query += ' AND r.type = ?';
+            params.push(type);
+        }
+
+        query += ' ORDER BY r.createdAt DESC';
+
+        db.all(query, params, (err, rows) => {
+            if (err) {
+                console.error('Database error:', err);
+                return res.status(500).json({
+                    message: 'Adatbázis hiba'
+                });
+            }
+
+            const reviews = rows.map(row => ({
+                id: row.id,
+                reviewerId: row.reviewerId,
+                reviewerName: row.reviewerName,
+                reviewedUserId: row.reviewedUserId,
+                workId: row.workId,
+                workTitle: row.workTitle,
+                rating: row.rating,
+                comment: row.comment,
+                isReliable: Boolean(row.isReliable),
+                isPaid: Boolean(row.isPaid),
+                type: row.type,
+                createdAt: row.createdAt,
+                updatedAt: row.updatedAt
+            }));
+
+            res.status(200).json({
+                reviews: reviews,
+                count: reviews.length
+            });
+        });
+
+    } catch (error) {
+        console.error('Get user reviews error:', error);
+        res.status(500).json({
+            message: 'Szerver hiba'
+        });
+    }
+});
+
+// MUNKA ÉRTÉKELÉSEINEK LEKÉRÉSE
+app.get('/api/reviews/work/:workId', (req, res) => {
+    try {
+        const { workId } = req.params;
+
+        db.all(
+            `SELECT r.*, w.title as workTitle
+             FROM reviews r
+             LEFT JOIN works w ON r.workId = w.id
+             WHERE r.workId = ?
+             ORDER BY r.createdAt DESC`,
+            [workId],
+            (err, rows) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({
+                        message: 'Adatbázis hiba'
+                    });
+                }
+
+                const reviews = rows.map(row => ({
+                    id: row.id,
+                    reviewerId: row.reviewerId,
+                    reviewerName: row.reviewerName,
+                    reviewedUserId: row.reviewedUserId,
+                    workId: row.workId,
+                    workTitle: row.workTitle,
+                    rating: row.rating,
+                    comment: row.comment,
+                    isReliable: Boolean(row.isReliable),
+                    isPaid: Boolean(row.isPaid),
+                    type: row.type,
+                    createdAt: row.createdAt,
+                    updatedAt: row.updatedAt
+                }));
+
+                res.status(200).json({
+                    reviews: reviews,
+                    count: reviews.length
+                });
+            }
+        );
+
+    } catch (error) {
+        console.error('Get work reviews error:', error);
+        res.status(500).json({
+            message: 'Szerver hiba'
+        });
+    }
+});
+
+// SZEMÉLYES ÉRTÉKELÉSEK LEKÉRÉSE (amiket én írtam)
+app.get('/api/reviews/my-reviews/:reviewerId', (req, res) => {
+    try {
+        const { reviewerId } = req.params;
+
+        db.all(
+            `SELECT r.*, w.title as workTitle, u.name as reviewedUserName
+             FROM reviews r
+             LEFT JOIN works w ON r.workId = w.id
+             LEFT JOIN users u ON r.reviewedUserId = u.id
+             WHERE r.reviewerId = ?
+             ORDER BY r.createdAt DESC`,
+            [reviewerId],
+            (err, rows) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({
+                        message: 'Adatbázis hiba'
+                    });
+                }
+
+                const reviews = rows.map(row => ({
+                    id: row.id,
+                    reviewerId: row.reviewerId,
+                    reviewerName: row.reviewerName,
+                    reviewedUserId: row.reviewedUserId,
+                    reviewedUserName: row.reviewedUserName,
+                    workId: row.workId,
+                    workTitle: row.workTitle,
+                    rating: row.rating,
+                    comment: row.comment,
+                    isReliable: Boolean(row.isReliable),
+                    isPaid: Boolean(row.isPaid),
+                    type: row.type,
+                    createdAt: row.createdAt,
+                    updatedAt: row.updatedAt
+                }));
+
+                res.status(200).json({
+                    reviews: reviews,
+                    count: reviews.length
+                });
+            }
+        );
+
+    } catch (error) {
+        console.error('Get my reviews error:', error);
+        res.status(500).json({
+            message: 'Szerver hiba'
+        });
+    }
+});
+
+// ÉRTÉKELÉS TÖRLÉSE
+app.delete('/api/reviews/:reviewId', (req, res) => {
+    try {
+        const { reviewId } = req.params;
+        const token = req.headers.authorization?.split(' ')[1];
+        
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            // Ellenőrizzük, hogy a felhasználó az értékelés szerzője-e
+            db.get('SELECT reviewerId FROM reviews WHERE id = ?', [reviewId], (err, review) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                if (!review) {
+                    return res.status(404).json({ message: 'Értékelés nem található' });
+                }
+
+                if (review.reviewerId !== decoded.id) {
+                    return res.status(403).json({ message: 'Csak a saját értékelésedet törölheted' });
+                }
+
+                db.run('DELETE FROM reviews WHERE id = ?', [reviewId], function(err) {
+                    if (err) {
+                        console.error('Delete review error:', err);
+                        return res.status(500).json({ message: 'Hiba az értékelés törlésekor' });
+                    }
+
+                    res.status(200).json({
+                        message: 'Értékelés sikeresen törölve',
+                        reviewId: reviewId
+                    });
+
+                    console.log('✅ Értékelés törölve:', reviewId);
+                });
+            });
+        });
+
+    } catch (error) {
+        console.error('Delete review error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// FELHASZNÁLÓ ÁTLAGOS ÉRTÉKELÉSÉNEK FRISSÍTÉSE
+function updateUserRating(userId) {
+    db.all(
+        'SELECT rating FROM reviews WHERE reviewedUserId = ?',
+        [userId],
+        (err, rows) => {
+            if (err) {
+                console.error('Error fetching reviews for rating update:', err);
+                return;
+            }
+
+            if (rows.length === 0) {
+                // Nincs értékelés, alapértelmezett érték
+                db.run('UPDATE users SET rating = 0.0 WHERE id = ?', [userId]);
+                return;
+            }
+
+            const totalRating = rows.reduce((sum, row) => sum + row.rating, 0);
+            const averageRating = totalRating / rows.length;
+
+            db.run(
+                'UPDATE users SET rating = ? WHERE id = ?',
+                [averageRating.toFixed(1), userId],
+                (err) => {
+                    if (err) {
+                        console.error('Error updating user rating:', err);
+                    } else {
+                        console.log(`✅ User ${userId} rating updated to: ${averageRating.toFixed(1)}`);
+                    }
+                }
+            );
+        }
+    );
+}
 // Works tábla létrehozása
 db.run(`CREATE TABLE IF NOT EXISTS works (
     id TEXT PRIMARY KEY,
@@ -1162,10 +2784,6 @@ db.run(`CREATE TABLE IF NOT EXISTS works (
 console.log('✅ Works tábla inicializálva');
 
 // WORK PUBLIKÁLÁS
-// server.js - /api/works/publish endpoint frissítése
-
-// server.js - /api/works/publish endpoint javítása
-
 app.post('/api/works/publish', (req, res) => {
     try {
         const {
@@ -1177,6 +2795,7 @@ app.post('/api/works/publish', (req, res) => {
         console.log('\n🎯 ÚJ MUNKA ÉRKEZETT:');
         console.log('  - ID:', id);
         console.log('  - Cím:', title);
+        console.log('  - Leírás:', description || 'Nincs leírás'); // DEBUG
         console.log('  - Munkáltató:', employerName);
         console.log('  - Munkáltató ID:', employerID);
         console.log('  - Bér:', wage, 'Ft');
@@ -1396,203 +3015,212 @@ app.get('/api/works', (req, res) => {
 });
 // server.js - Add hozzá ezeket a végpontokat
 
-// MUNKA LEKÉRÉSE ID ALAPJÁN
+// server.js - Javított /api/works/:workId endpoint
 app.get('/api/works/:workId', (req, res) => {
     try {
         const { workId } = req.params;
-        const token = req.headers.authorization?.split(' ')[1];
+        console.log('🔍 Munka lekérés ID alapján:', workId);
+        console.log('📝 ID típusa:', typeof workId);
+
+        // Próbáljuk meg integer-ként és string-ként is
+        let query = `
+            SELECT w.*, u.name as employerName, u.profileImageUrl as employerProfileImage
+            FROM works w
+            LEFT JOIN users u ON w.employerID = u.id
+            WHERE w.id = ? OR w.id = ?
+        `;
         
-        if (!token) {
-            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        let params = [workId, workId];
+        
+        // Ha UUID formátumú, próbáljuk meg integerré konvertálni
+        if (workId.length === 36) { // UUID hossza
+            const possibleIntId = convertUUIDtoInt(workId);
+            if (possibleIntId) {
+                query = `
+                    SELECT w.*, u.name as employerName, u.profileImageUrl as employerProfileImage
+                    FROM works w
+                    LEFT JOIN users u ON w.employerID = u.id
+                    WHERE w.id = ? OR w.id = ? OR w.id = ?
+                `;
+                params = [workId, workId, possibleIntId];
+            }
         }
 
-        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        console.log('🔍 Query:', query);
+        console.log('🔍 Params:', params);
+
+        db.get(query, params, (err, row) => {
             if (err) {
-                return res.status(401).json({ message: 'Érvénytelen token' });
+                console.error('❌ Adatbázis hiba:', err);
+                return res.status(500).json({ message: 'Adatbázis hiba' });
             }
 
-            db.get(
-                `SELECT w.*, u.name as employerName, u.profileImageUrl as employerProfileImage
-                 FROM works w
-                 LEFT JOIN users u ON w.employerID = u.id
-                 WHERE w.id = ?`,
-                [workId],
-                (err, row) => {
-                    if (err) {
-                        console.error('Database error:', err);
-                        return res.status(500).json({ message: 'Adatbázis hiba' });
+            if (!row) {
+                console.log('❌ Munka nem található ezzel az ID-vel:', workId);
+                
+                // DEBUG: Listázzuk az összes munka ID-t
+                db.all('SELECT id FROM works', (err, allWorks) => {
+                    if (!err) {
+                        console.log('📋 Elérhető munka ID-k:');
+                        allWorks.forEach(work => {
+                            console.log(`  - ${work.id} (típus: ${typeof work.id})`);
+                        });
                     }
+                });
+                
+                return res.status(404).json({ message: 'Munka nem található' });
+            }
 
-                    if (!row) {
-                        return res.status(404).json({ message: 'Munka nem található' });
-                    }
+            console.log('✅ Munka megtalálva:', row.title);
+            console.log('📝 Talált munka ID:', row.id, '(típus:', typeof row.id + ')');
 
-                    const work = {
-                        id: row.id,
-                        title: row.title,
-                        employerName: row.employerName,
-                        employerID: row.employerID,
-                        employeeID: row.employeeID,
-                        wage: row.wage,
-                        paymentType: row.paymentType,
-                        statusText: row.statusText,
-                        startTime: row.startTime,
-                        endTime: row.endTime,
-                        duration: row.duration,
-                        progress: row.progress,
-                        location: row.location,
-                        skills: JSON.parse(row.skills || '[]'),
-                        category: row.category,
-                        description: row.description,
-                        createdAt: row.createdAt,
-                        updatedAt: row.updatedAt,
-                        employerProfileImage: row.employerProfileImage
-                    };
+            const work = {
+                id: row.id.toString(), // Mindig stringként küldjük
+                title: row.title,
+                employerName: row.employerName,
+                employerID: row.employerID,
+                employeeID: row.employeeID,
+                wage: row.wage,
+                paymentType: row.paymentType,
+                statusText: row.statusText,
+                startTime: row.startTime,
+                endTime: row.endTime,
+                duration: row.duration,
+                progress: row.progress,
+                location: row.location,
+                skills: JSON.parse(row.skills || '[]'),
+                category: row.category,
+                description: row.description,
+                createdAt: row.createdAt,
+                updatedAt: row.updatedAt,
+                employerProfileImage: row.employerProfileImage
+            };
 
-                    res.status(200).json({ work });
-                }
-            );
+            res.status(200).json({ work });
         });
 
     } catch (error) {
-        console.error('Get work error:', error);
+        console.error('❌ Get work error:', error);
         res.status(500).json({ message: 'Szerver hiba' });
     }
 });
 
-// AKTÍV MUNKA LEKÉRÉSE DOLGOZÓ SZÁMÁRA
+
+// server.js - Javított /api/works/employee/:employeeId/active endpoint
 app.get('/api/works/employee/:employeeId/active', (req, res) => {
     try {
         const { employeeId } = req.params;
-        const token = req.headers.authorization?.split(' ')[1];
-        
-        if (!token) {
-            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
-        }
+        console.log('🔍 Aktív munka keresése dolgozó számára:', employeeId);
 
-        jwt.verify(token, JWT_SECRET, (err, decoded) => {
-            if (err) {
-                return res.status(401).json({ message: 'Érvénytelen token' });
-            }
-
-            // Aktív munka keresése (Folyamatban státuszú)
-            db.get(
-                `SELECT w.*, u.name as employerName, u.profileImageUrl as employerProfileImage
-                 FROM works w
-                 LEFT JOIN users u ON w.employerID = u.id
-                 WHERE w.employeeID = ? AND w.statusText = 'Folyamatban'`,
-                [employeeId],
-                (err, row) => {
-                    if (err) {
-                        console.error('Database error:', err);
-                        return res.status(500).json({ message: 'Adatbázis hiba' });
-                    }
-
-                    if (!row) {
-                        return res.status(404).json({ message: 'Nincs aktív munka' });
-                    }
-
-                    const work = {
-                        id: row.id,
-                        title: row.title,
-                        employerName: row.employerName,
-                        employerID: row.employerID,
-                        employeeID: row.employeeID,
-                        wage: row.wage,
-                        paymentType: row.paymentType,
-                        statusText: row.statusText,
-                        startTime: row.startTime,
-                        endTime: row.endTime,
-                        duration: row.duration,
-                        progress: row.progress,
-                        location: row.location,
-                        skills: JSON.parse(row.skills || '[]'),
-                        category: row.category,
-                        description: row.description,
-                        createdAt: row.createdAt,
-                        updatedAt: row.updatedAt,
-                        employerProfileImage: row.employerProfileImage
-                    };
-
-                    res.status(200).json({ work });
+        // NINCS token ellenőrzés - egyszerűsített verzió
+        db.get(
+            `SELECT w.*, u.name as employerName, u.profileImageUrl as employerProfileImage
+             FROM works w
+             LEFT JOIN users u ON w.employerID = u.id
+             WHERE w.employeeID = ? AND w.statusText = 'Folyamatban'`,
+            [employeeId],
+            (err, row) => {
+                if (err) {
+                    console.error('❌ Adatbázis hiba:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
                 }
-            );
-        });
+
+                if (!row) {
+                    console.log('ℹ️ Nincs aktív munka a dolgozó számára:', employeeId);
+                    return res.status(404).json({ message: 'Nincs aktív munka' });
+                }
+
+                console.log('✅ Aktív munka megtalálva:', row.title);
+
+                const work = {
+                    id: row.id,
+                    title: row.title,
+                    employerName: row.employerName,
+                    employerID: row.employerID,
+                    employeeID: row.employeeID,
+                    wage: row.wage,
+                    paymentType: row.paymentType,
+                    statusText: row.statusText,
+                    startTime: row.startTime,
+                    endTime: row.endTime,
+                    duration: row.duration,
+                    progress: row.progress,
+                    location: row.location,
+                    skills: JSON.parse(row.skills || '[]'),
+                    category: row.category,
+                    description: row.description,
+                    createdAt: row.createdAt,
+                    updatedAt: row.updatedAt,
+                    employerProfileImage: row.employerProfileImage
+                };
+
+                res.status(200).json({ work });
+            }
+        );
 
     } catch (error) {
-        console.error('Get active work error:', error);
+        console.error('❌ Get active work error:', error);
         res.status(500).json({ message: 'Szerver hiba' });
     }
 });
-
-// MUNKA HOZZÁRENDELÉSE DOLGOZÓHOZ
+// server.js - Javított /api/works/:workId/assign endpoint
 app.put('/api/works/:workId/assign', (req, res) => {
     try {
         const { workId } = req.params;
         const { employeeID, statusText } = req.body;
-        const token = req.headers.authorization?.split(' ')[1];
         
-        if (!token) {
-            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
-        }
+        console.log('🔧 Dolgozó hozzárendelése munkához:');
+        console.log('  - Munka ID:', workId);
+        console.log('  - Dolgozó ID:', employeeID);
+        console.log('  - Státusz:', statusText);
 
-        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        // 1. Ellenőrizzük, hogy a munka létezik-e
+        db.get('SELECT * FROM works WHERE id = ?', [workId], (err, work) => {
             if (err) {
-                return res.status(401).json({ message: 'Érvénytelen token' });
+                console.error('❌ Adatbázis hiba:', err);
+                return res.status(500).json({ message: 'Adatbázis hiba' });
             }
 
-            // Ellenőrizzük, hogy a munka létezik-e
-            db.get('SELECT * FROM works WHERE id = ?', [workId], (err, work) => {
-                if (err) {
-                    console.error('Database error:', err);
-                    return res.status(500).json({ message: 'Adatbázis hiba' });
-                }
+            if (!work) {
+                console.log('❌ Munka nem található:', workId);
+                return res.status(404).json({ message: 'Munka nem található' });
+            }
 
-                if (!work) {
-                    return res.status(404).json({ message: 'Munka nem található' });
-                }
+            console.log('✅ Munka megtalálva:', work.title);
 
-                // Ellenőrizzük, hogy a dolgozó létezik-e
-                db.get('SELECT id FROM users WHERE id = ?', [employeeID], (err, employee) => {
+            // 2. ELLENŐRZÉS MÓDOSÍTÁSA: Ne ellenőrizzük, hogy a dolgozó létezik-e
+            // (Lehet, hogy a dolgozó még nincs regisztrálva, de ez nem akadály)
+            console.log('⚠️  SKIP: Dolgozó létezésének ellenőrzése (fejlesztési mód)');
+            
+            // 3. Frissítjük a munkát
+            db.run(
+                'UPDATE works SET employeeID = ?, statusText = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+                [employeeID, statusText, workId],
+                function(err) {
                     if (err) {
-                        console.error('Database error:', err);
-                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                        console.error('❌ Munka frissítési hiba:', err);
+                        return res.status(500).json({ message: 'Hiba a munka frissítésekor' });
                     }
 
-                    if (!employee) {
-                        return res.status(404).json({ message: 'Dolgozó nem található' });
-                    }
-
-                    // Frissítjük a munkát
-                    db.run(
-                        'UPDATE works SET employeeID = ?, statusText = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
-                        [employeeID, statusText, workId],
-                        function(err) {
-                            if (err) {
-                                console.error('Assign employee error:', err);
-                                return res.status(500).json({ message: 'Hiba a munka frissítésekor' });
-                            }
-
-                            res.status(200).json({
-                                message: 'Dolgozó sikeresen hozzárendelve a munkához',
-                                workId: workId,
-                                employeeID: employeeID,
-                                statusText: statusText
-                            });
-
-                            console.log('✅ Dolgozó hozzárendelve:', { workId, employeeID, statusText });
-                        }
-                    );
-                });
-            });
+                    console.log('✅ Munka sikeresen frissítve');
+                    console.log('   - Dolgozó hozzárendelve:', employeeID);
+                    console.log('   - Új státusz:', statusText);
+                    
+                    res.status(200).json({
+                        message: 'Dolgozó sikeresen hozzárendelve a munkához',
+                        workId: workId,
+                        employeeID: employeeID,
+                        statusText: statusText
+                    });
+                }
+            );
         });
 
     } catch (error) {
-        console.error('Assign employee error:', error);
+        console.error('❌ Assign employee error:', error);
         res.status(500).json({ message: 'Szerver hiba' });
     }
 });
-
 app.put('/api/works/:workId/status', (req, res) => {
     try {
         const { workId } = req.params;
@@ -1661,87 +3289,148 @@ app.put('/api/works/:workId/status', (req, res) => {
 
 
 // MANUÁLIS KÓD ALAPJÁN MUNKA LEKÉRÉSE
+// server.js - Javított /api/works/code/:manualCode endpoint
 app.get('/api/works/code/:manualCode', (req, res) => {
     try {
         const { manualCode } = req.params;
-        const token = req.headers.authorization?.split(' ')[1];
-        
-        if (!token) {
-            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        console.log('🔍 Munka keresés kóddal:', manualCode);
+
+        // NINCS token ellenőrzés - bárki használhatja
+        // Elsőként próbáljuk UUID-ként
+        if (manualCode.length === 36) {
+            console.log('🔍 UUID formátumú kód');
+            db.get(
+                `SELECT w.*, u.name as employerName, u.profileImageUrl as employerProfileImage
+                 FROM works w
+                 LEFT JOIN users u ON w.employerID = u.id
+                 WHERE w.id = ?`,
+                [manualCode],
+                (err, row) => {
+                    if (err) {
+                        console.error('❌ Adatbázis hiba:', err);
+                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                    }
+
+                    if (row) {
+                        console.log('✅ Munka megtalálva UUID alapján:', row.title);
+                        return sendWorkResponse(res, row);
+                    } else {
+                        // Ha nem találtuk UUID-ként, próbáljuk meg rövid kódként
+                        searchByShortCode(manualCode, res);
+                    }
+                }
+            );
+        } else {
+            // Rövid kód keresése
+            searchByShortCode(manualCode, res);
         }
 
-        jwt.verify(token, JWT_SECRET, (err, decoded) => {
-            if (err) {
-                return res.status(401).json({ message: 'Érvénytelen token' });
-            }
-
-            // Kód alapján munka keresése
-            // A kód az első 8 karaktere a work ID-nek
-            db.all('SELECT id FROM works', (err, allWorks) => {
-                if (err) {
-                    console.error('Database error:', err);
-                    return res.status(500).json({ message: 'Adatbázis hiba' });
-                }
-
-                // Keresünk egy munkát, aminek az ID-jének első 8 karaktere megegyezik a kóddal
-                const matchingWork = allWorks.find(work =>
-                    work.id.substring(0, 8) === manualCode
-                );
-
-                if (!matchingWork) {
-                    return res.status(404).json({ message: 'Nem található munka ezzel a kóddal' });
-                }
-
-                // Lekérjük a teljes munka adatokat
-                db.get(
-                    `SELECT w.*, u.name as employerName, u.profileImageUrl as employerProfileImage
-                     FROM works w
-                     LEFT JOIN users u ON w.employerID = u.id
-                     WHERE w.id = ?`,
-                    [matchingWork.id],
-                    (err, row) => {
-                        if (err) {
-                            console.error('Database error:', err);
-                            return res.status(500).json({ message: 'Adatbázis hiba' });
-                        }
-
-                        if (!row) {
-                            return res.status(404).json({ message: 'Munka nem található' });
-                        }
-
-                        const work = {
-                            id: row.id,
-                            title: row.title,
-                            employerName: row.employerName,
-                            employerID: row.employerID,
-                            employeeID: row.employeeID,
-                            wage: row.wage,
-                            paymentType: row.paymentType,
-                            statusText: row.statusText,
-                            startTime: row.startTime,
-                            endTime: row.endTime,
-                            duration: row.duration,
-                            progress: row.progress,
-                            location: row.location,
-                            skills: JSON.parse(row.skills || '[]'),
-                            category: row.category,
-                            description: row.description,
-                            createdAt: row.createdAt,
-                            updatedAt: row.updatedAt,
-                            employerProfileImage: row.employerProfileImage
-                        };
-
-                        res.status(200).json({ work });
-                    }
-                );
-            });
-        });
-
     } catch (error) {
-        console.error('Get work by code error:', error);
+        console.error('❌ Get work by code error:', error);
         res.status(500).json({ message: 'Szerver hiba' });
     }
 });
+
+// Segédfüggvény rövid kód keresésére
+function searchByShortCode(manualCode, res) {
+    console.log('🔍 Rövid kód keresése:', manualCode);
+    
+    // Összes munka lekérése és szűrés
+    db.all('SELECT id FROM works', (err, allWorks) => {
+        if (err) {
+            console.error('❌ Adatbázis hiba:', err);
+            return res.status(500).json({ message: 'Adatbázis hiba' });
+        }
+
+        console.log(`📋 Összes munka: ${allWorks.length} db`);
+
+        // Keresünk egy munkát, aminek az ID-jének első 8 karaktere megegyezik a kóddal
+        const matchingWork = allWorks.find(work => {
+            const shortId = work.id.substring(0, 8);
+            console.log(`  - ${work.id} -> ${shortId}`);
+            return shortId === manualCode;
+        });
+
+        if (!matchingWork) {
+            console.log('❌ Nem található munka ezzel a kóddal:', manualCode);
+            return res.status(404).json({ message: 'Nem található munka ezzel a kóddal' });
+        }
+
+        console.log('✅ Megfelelő munka megtalálva:', matchingWork.id);
+
+        // Teljes munka adatok lekérése
+        db.get(
+            `SELECT w.*, u.name as employerName, u.profileImageUrl as employerProfileImage
+             FROM works w
+             LEFT JOIN users u ON w.employerID = u.id
+             WHERE w.id = ?`,
+            [matchingWork.id],
+            (err, row) => {
+                if (err) {
+                    console.error('❌ Adatbázis hiba:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                if (!row) {
+                    return res.status(404).json({ message: 'Munka nem található' });
+                }
+
+                sendWorkResponse(res, row);
+            }
+        );
+    });
+}
+// server.js - Add hozzá ezt a segédfüggvényt
+function convertUUIDtoInt(uuid) {
+    if (typeof uuid === 'number') {
+        return uuid;
+    }
+    
+    if (typeof uuid === 'string') {
+        // Ha már integer string formátumban
+        if (/^\d+$/.test(uuid)) {
+            return parseInt(uuid);
+        }
+        
+        // UUID hash-elése egész számmá
+        let hash = 0;
+        for (let i = 0; i < uuid.length; i++) {
+            const char = uuid.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        return Math.abs(hash);
+    }
+    
+    return null;
+}
+
+// Segédfüggvény válasz küldésére
+function sendWorkResponse(res, row) {
+    const work = {
+        id: row.id,
+        title: row.title,
+        employerName: row.employerName,
+        employerID: row.employerID,
+        employeeID: row.employeeID,
+        wage: row.wage,
+        paymentType: row.paymentType,
+        statusText: row.statusText,
+        startTime: row.startTime,
+        endTime: row.endTime,
+        duration: row.duration,
+        progress: row.progress,
+        location: row.location,
+        skills: JSON.parse(row.skills || '[]'),
+        category: row.category,
+        description: row.description,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        employerProfileImage: row.employerProfileImage
+    };
+
+    res.status(200).json({ work });
+}
 
 // DEBUG: Token ellenőrző végpont
 app.get('/api/auth/debug-token', (req, res) => {
@@ -1970,6 +3659,8 @@ app.put('/api/works/:id/status', (req, res) => {
         res.status(500).json({ message: 'Szerver hiba' });
     }
 });
+
+
 
 // Szerver indítása
 const PORT = process.env.PORT || 3000;

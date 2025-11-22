@@ -30,6 +30,19 @@ struct ContentView: View {
                             Text(NSLocalizedString("Account", comment: ""))
                         }
                         .tag(2)
+                    
+                    WorkStartEmployeeView()
+                        .tabItem {
+                            Image(systemName: "qrcode")
+                            Text(NSLocalizedString("ScanQR", comment: ""))
+                        }
+                        .tag(3)
+                    StartWorkView(work: WorkData.mockWork)
+                        .tabItem {
+                            Image(systemName: "qrcode")
+                            Text(NSLocalizedString("StartWork", comment: ""))
+                        }
+                        .tag(3)
                 }
             } else {
                 // Bejelentkezési nézet

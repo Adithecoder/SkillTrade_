@@ -16,31 +16,69 @@ import DesignSystem
 
 struct CardListView: View {
     @StateObject private var cardManager = CardManager.shared
+    @Environment(\.presentationMode) private var presentationMode
     @State private var showingAddCard = false
     @State private var cardToDelete: Card?
     @State private var showDeleteAlert = false
     
     var body: some View {
         NavigationView {
-            Group {
-                if cardManager.userCards.isEmpty {
-                    EmptyCardView(showingAddCard: $showingAddCard)
-                } else {
-                    List {
-                        ForEach(cardManager.userCards) { card in
-                            CardRowView(
-                                card: card,
-                                onSetDefault: { setDefaultCard(card) },
-                                onDelete: { confirmDelete(card) }
-                            )
-                        }
+            VStack {
+                // Hozzáadott HStack felülre
+                HStack {
+                    Button(action: {
+                        presentationMode.wrappedValue.dismiss()
+
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 18))
+                            .foregroundColor(.DesignSystem.fokekszin)
+                            .padding(8)
+                            .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                            .clipShape(Circle())
                     }
-                    .listStyle(PlainListStyle())
+                    
+                    Spacer()
+                    
+                    Text("Fizetés és pénzügyek")
+                        .font(.custom("Lexend", size: 18))
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .fontWeight(.semibold)
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        showingAddCard = true
+                    }) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 16))
+                            .foregroundStyle( Color.DesignSystem.fokekszin )
+                            .padding(8)
+                            .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                            .clipShape(Circle())
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, -240)
+                
+                // Meglévő tartalom
+                Group {
+                    if cardManager.userCards.isEmpty {
+                        EmptyCardView(showingAddCard: $showingAddCard)
+                    } else {
+                        List {
+                            ForEach(cardManager.userCards) { card in
+                                CardRowView(
+                                    card: card,
+                                    onSetDefault: { setDefaultCard(card) },
+                                    onDelete: { confirmDelete(card) }
+                                )
+                            }
+                        }
+                        .listStyle(PlainListStyle())
+                    }
                 }
             }
-            .navigationTitle("Bankkártyák")
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationBarItems(trailing: addButton)
             .sheet(isPresented: $showingAddCard) {
                 AddCardView()
             }
@@ -331,12 +369,12 @@ struct EmptyCardView: View {
             
             VStack(spacing: 8) {
                 Text("Nincsenek kártyák")
-                    .font(.title2)
+                    .font(.custom("Jellee", size: 24))
                     .fontWeight(.medium)
                     .foregroundColor(.primary)
                 
-                Text("Adjon hozzá egy bankkártyát a gyorsabb fizetéshez")
-                    .font(.body)
+                Text("Adj hozzá egy bankkártyát a gyorsabb fizetéshez")
+                    .font(.custom("Lexend", size: 18))
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
@@ -349,12 +387,12 @@ struct EmptyCardView: View {
                     Image(systemName: "plus.circle.fill")
                     Text("Kártya hozzáadása")
                 }
-                .font(.headline)
+                .font(.custom("Lexend", size: 20))
                 .foregroundColor(.white)
                 .padding()
                 .frame(maxWidth: .infinity)
                 .background(Color.blue)
-                .cornerRadius(12)
+                .cornerRadius(15)
                 .padding(.horizontal, 40)
             }
         }

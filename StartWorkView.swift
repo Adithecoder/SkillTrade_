@@ -29,6 +29,7 @@ struct StartWorkView: View {
 //    let onShowQRCode2: () -> Void
     var body: some View {
         NavigationView {
+            
             ZStack {
                 // Háttér
 //                Image("hatter2")
@@ -36,20 +37,49 @@ struct StartWorkView: View {
 //                    .edgesIgnoringSafeArea(.all)
                 
                 VStack(spacing: 0) {
+                    HStack {
+                        Button(action: {
+
+                        }) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18))
+                                .foregroundColor(.DesignSystem.fokekszin)
+                                .padding(8)
+                                .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                                .clipShape(Circle())
+                        }
+                        
+                        Spacer()
+                        
+                        Text("Munkáid kezelése")
+                            .font(.custom("Lexend", size: 18))
+                            .foregroundColor(.DesignSystem.fokekszin)
+                            .fontWeight(.semibold)
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                            refreshWorks()
+                        }) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 16))
+                                .foregroundStyle( Color.DesignSystem.fokekszin )
+                                .padding(8)
+                                .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                                .clipShape(Circle())
+                        }
+                    }
+                    .padding(.horizontal)
                     // Header
                     VStack(spacing: 16) {
-                        Text("Munkáim Kezelése")
-                            .font(.custom("Jellee", size: 28))
-                            .foregroundColor(.DesignSystem.fokekszin)
-                            .multilineTextAlignment(.center)
-                            .padding(.top, -40)
+
                         
                         Text("Itt kezelheted a posztolt munkáidat és a jelentkezéseket")
                             .font(.custom("Lexend", size: 16))
                             .foregroundColor(.DesignSystem.descriptions)
                             .multilineTextAlignment(.center)
                     }
-                    .padding(.vertical, 20)
+                    .padding(.vertical, 10)
                     
                     
                     HStack(spacing: 12) {
@@ -103,18 +133,7 @@ struct StartWorkView: View {
                 }
                 
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: {
-                        refreshWorks()
-                    }) {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundColor(.DesignSystem.fokekszin)
-                            .font(.title3)
-                    }
-                }
-            }
+
             .sheet(item: $selectedWork) { work in
                 WorkDetailView(
                     work: work,

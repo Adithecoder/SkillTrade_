@@ -456,7 +456,7 @@ class AddCardViewModel: ObservableObject {
         let currentYear = Calendar.current.component(.year, from: Date()) % 100
         return Array(currentYear...(currentYear + 10))
     }
-        
+    
     var isFormValid: Bool {
         validationErrors.isEmpty &&
         !cardNumber.isEmpty &&

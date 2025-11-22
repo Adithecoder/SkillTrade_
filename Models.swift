@@ -1,6 +1,11 @@
 import Foundation
 import SwiftUI
 import Combine
+import DesignSystem
+
+import Foundation
+import SwiftUI
+import Combine
 
 // MARK: - Message Model
 public struct Message: Identifiable, Codable, Equatable {
@@ -1112,3 +1117,251 @@ public enum TypeofService: String, Codable {
         }
     }
 }
+
+extension Card {
+    var isExpired: Bool {
+        let currentDate = Date()
+        let calendar = Calendar.current
+        let currentYear = calendar.component(.year, from: currentDate)
+        let currentMonth = calendar.component(.month, from: currentDate)
+        
+        let fullExpirationYear: Int
+        if expirationYear < 100 {
+            fullExpirationYear = 2000 + expirationYear
+        } else {
+            fullExpirationYear = expirationYear
+        }
+        
+        if fullExpirationYear < currentYear {
+            return true
+        } else if fullExpirationYear == currentYear && expirationMonth < currentMonth {
+            return true
+        }
+        return false
+    }
+    
+    // NEW: formatted expiration as "MM/YY"
+    var formattedExpiration: String {
+        let month = String(format: "%02d", expirationMonth)
+        let yearTwoDigits = expirationYear % 100
+        let year = String(format: "%02d", yearTwoDigits)
+        return "\(month)/\(year)"
+    }
+}
+
+
+// MARK: - Card Types
+public struct Card: Identifiable, Codable, Equatable {
+    public let id: UUID
+    public let cardName: String?
+    public let cardNumber: String
+    public let cardHolderName: String
+    public let expirationMonth: Int
+    public let expirationYear: Int
+    public let cvv: String
+    public let cardType: CardType
+    public var isDefault: Bool // Changed to var
+    public let createdAt: Date
+    public let lastFourDigits: String
+    public let cardColor: String? // Új: szín tárolása
+    
+    public init(
+        id: UUID = UUID(),
+        cardName: String? = nil,
+        cardNumber: String,
+        cardHolderName: String,
+        expirationMonth: Int,
+        expirationYear: Int,
+        cvv: String,
+        cardType: CardType,
+        isDefault: Bool = false,
+        createdAt: Date = Date(),
+        cardColor: String? = nil // Új paraméter
+    ) {
+        self.id = id
+        self.cardName = cardName
+        self.cardNumber = cardNumber
+        self.cardHolderName = cardHolderName
+        self.expirationMonth = expirationMonth
+        self.expirationYear = expirationYear
+        self.cvv = cvv
+        self.cardType = cardType
+        self.isDefault = isDefault
+        self.createdAt = createdAt
+        self.lastFourDigits = String(cardNumber.suffix(4))
+        self.cardColor = cardColor
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        id = try container.decode(UUID.self, forKey: .id)
+        cardName = try container.decodeIfPresent(String.self, forKey: .cardName)
+        cardNumber = try container.decode(String.self, forKey: .cardNumber)
+        cardHolderName = try container.decode(String.self, forKey: .cardHolderName)
+        expirationMonth = try container.decode(Int.self, forKey: .expirationMonth)
+        expirationYear = try container.decode(Int.self, forKey: .expirationYear)
+        cardType = try container.decode(CardType.self, forKey: .cardType)
+        isDefault = try container.decode(Bool.self, forKey: .isDefault)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        lastFourDigits = try container.decode(String.self, forKey: .lastFourDigits)
+        cardColor = try container.decodeIfPresent(String.self, forKey: .cardColor)
+        
+        self.cvv = ""
+    }
+    
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(cardNumber, forKey: .cardNumber)
+        try container.encode(cardHolderName, forKey: .cardHolderName)
+        try container.encode(expirationMonth, forKey: .expirationMonth)
+        try container.encode(expirationYear, forKey: .expirationYear)
+        try container.encode(cardType, forKey: .cardType)
+        try container.encode(isDefault, forKey: .isDefault)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(lastFourDigits, forKey: .lastFourDigits)
+        // Note: CVV is not encoded for security reasons
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case id, cardNumber, cardName, cardHolderName, expirationMonth, expirationYear
+        case cardType, isDefault, createdAt, lastFourDigits, cardColor
+    }
+    
+    public func copyWith(
+        isDefault: Bool? = nil
+    ) -> Card {
+        return Card(
+            id: self.id,
+            cardNumber: self.cardNumber,
+            cardHolderName: self.cardHolderName,
+            expirationMonth: self.expirationMonth,
+            expirationYear: self.expirationYear,
+            cvv: self.cvv,
+            cardType: self.cardType,
+            isDefault: isDefault ?? self.isDefault,
+            createdAt: self.createdAt
+        )
+    }
+}
+
+public enum CardType: String, Codable, CaseIterable {
+    case none = "None"
+    case visa = "Visa"
+    case mastercard = "Mastercard"
+    case americanExpress = "American Express"
+    case discover = "Discover"
+    
+    public var iconName: String {
+        switch self {
+        case .none : return "creditcard.fill"
+        case .visa: return "visa"
+        case .mastercard: return "mastercard"
+        case .americanExpress: return "amex"
+        case .discover: return "discover"
+        }
+    }
+    
+    public var color: Color {
+        switch self {
+        case .none: return Color.DesignSystem.fokekszin
+        case .visa: return Color.blue
+        case .mastercard: return Color.red
+        case .americanExpress: return Color.green
+        case .discover: return Color.orange
+        }
+    }
+    
+    public static func detect(from cardNumber: String) -> CardType {
+        let cleanedNumber = cardNumber.replacingOccurrences(of: " ", with: "")
+        
+        if cleanedNumber.hasPrefix("4") {
+            return .visa
+        } else if cleanedNumber.hasPrefix("5") {
+            return .mastercard
+        } else if cleanedNumber.hasPrefix("3") {
+            return .americanExpress
+        } else if cleanedNumber.hasPrefix("6") {
+            return .discover
+        }
+        
+        return .none // default
+    }
+}
+// MARK: - Card Validation
+public struct CardValidation {
+    public static func isValidCardNumber(_ number: String) -> Bool {
+        let cleaned = number.replacingOccurrences(of: " ", with: "")
+        
+        guard cleaned.count >= 13 && cleaned.count <= 19 else {
+            return false
+        }
+        
+        return isValidLuhn(cleaned)
+    }
+    
+    public static func isValidExpiration(month: Int, year: Int) -> Bool {
+        let currentDate = Date()
+        let calendar = Calendar.current
+        let currentYear = calendar.component(.year, from: currentDate) % 100
+        let currentMonth = calendar.component(.month, from: currentDate)
+        
+        guard month >= 1 && month <= 12 else { return false }
+        
+        if year < currentYear {
+            return false
+        } else if year == currentYear && month < currentMonth {
+            return false
+        }
+        
+        return true
+    }
+    
+    public static func isValidCVV(_ cvv: String, cardType: CardType) -> Bool {
+        let cleaned = cvv.replacingOccurrences(of: " ", with: "")
+        
+        switch cardType {
+        case .americanExpress:
+            return cleaned.count == 4
+        default:
+            return cleaned.count == 3
+        }
+    }
+    
+    private static func isValidLuhn(_ number: String) -> Bool {
+        var sum = 0
+        let digits = number.reversed().map { String($0) }
+        
+        for (index, digit) in digits.enumerated() {
+            guard let intDigit = Int(digit) else { return false }
+            
+            if index % 2 == 1 {
+                let doubled = intDigit * 2
+                sum += doubled > 9 ? doubled - 9 : doubled
+            } else {
+                sum += intDigit
+            }
+        }
+        
+        return sum % 10 == 0
+    }
+    
+    public static func formatCardNumber(_ number: String) -> String {
+        let cleaned = number.replacingOccurrences(of: " ", with: "")
+        var formatted = ""
+        
+        for (index, character) in cleaned.enumerated() {
+            if index > 0 && index % 4 == 0 {
+                formatted += " "
+            }
+            formatted.append(character)
+        }
+        
+        return formatted
+    }
+    
+    
+}
+

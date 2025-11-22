@@ -18,10 +18,42 @@ struct PaymentPreviewView: View {
     var body: some View {
         VStack(spacing: 20) {
             // Fejléc
-            VStack(spacing: 12) {
+            HStack {
+                Button(action: {
+                    dismiss()
+
+                }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 18))
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                }
+                
+                Spacer()
+                
                 Text("Fizetés")
-                    .font(.custom("Jellee", size: 24))
+                    .font(.custom("Lexend", size: 18))
                     .foregroundColor(.DesignSystem.fokekszin)
+                    .fontWeight(.semibold)
+                
+                Spacer()
+                
+                Button(action: {
+                }) {
+                    Image(systemName: "creditcard.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle( Color.DesignSystem.fokekszin )
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                }
+            }
+            .padding(.horizontal)
+            
+            VStack(spacing: 12) {
+
                 
                 Text(service.name)
                     .font(.custom("Lexend", size: 18))
@@ -232,15 +264,7 @@ struct PaymentPreviewView: View {
             .padding(.horizontal)
             .padding(.bottom, 30)
         }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button("Vissza") {
-                    dismiss()
-                }
-                .foregroundColor(.DesignSystem.fokekszin)
-            }
-        }
+
         .fullScreenCover(isPresented: $showPaymentSimulation) {
             PaymentSimulationView(service: service)
         }

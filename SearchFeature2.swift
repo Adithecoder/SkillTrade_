@@ -219,7 +219,7 @@ class SearchViewModel2: ObservableObject {
             Service(
                 advertiser: User.preview, // Itt kellene a valódi usert használni
                 name: work.title,
-                description: "\(work.employerName) által kínált munka",
+                description: work.description ?? "\(work.employerName) által kínált munka",
                 rating: 0.0,
                 reviewCount: 0,
                 price: work.wage,
@@ -310,6 +310,572 @@ class SearchViewModel2: ObservableObject {
         services.remove(atOffsets: offsets)
     }
 }
+struct ModernServiceCard2: View {
+    let service: Service
+    @State private var showChat = false
+    @State private var showingProtectionInfo = false
+    @State private var showingActionSheet = false
+    @State private var isServiceSaved = false
+    @State private var isServiceLiked = false
+    @State private var protectionFee: Double = 0
+    @State private var profileImageUrl: URL?
+    @Binding var servicePrice: Double
+    @State private var hasApplied: Bool = false
+    @State private var isApplying: Bool = false
+    @State private var showApplicationResult: Bool = false
+    @State private var applicationResultMessage: String = ""
+    @State private var navigateToDetail: Bool = false
+    @State private var navigateToReviews: Bool = false
+    @State private var showSaveMessage = false
+    @State private var saveMessage = ""
+    @State private var showLocationMap = false
+    @State private var showLocationDetail = false
+    private let protectionModel = WorkerProtectionModel()
+    private let serverAuthManager = ServerAuthManager.shared
+    
+    // A teljes ár számítása
+    public var totalAmount: Double {
+        let fee = protectionModel.calculateTotalFee(for: servicePrice)
+        return servicePrice + fee
+    }
+    
+    private var formattedLocation: String {
+        let maxLength = 25 // Maximális hossz
+        if service.location.count > maxLength {
+            return String(service.location.prefix(maxLength - 3)) + "..."
+        }
+        return service.location
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            
+            // Header rész - ez lesz a NavigationLink
+            VStack {
+                HStack {
+                    HStack {
+                        Image(systemName: service.typeofService.systemName)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 40, height: 40)
+                            .foregroundColor(.DesignSystem.fokekszin)
+                            .clipShape(Circle())
+                        
+                        if service.advertiser.profileImageUrl != nil {
+                            AsyncImage(url: profileImageUrl) { image in
+                                image.resizable()
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(width: 40, height: 40)
+                                    .clipShape(Circle())
+                            } placeholder: {
+                                ProgressView()
+                            }
+                        } else {
+                            Circle()
+                                .fill(
+                                    LinearGradient(
+                                        gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]),
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .overlay(
+                                    Image(systemName: "person")
+                                        .foregroundStyle(.white)
+)
+                                .frame(width: 40, height: 40)
+                                .offset(x: -20)
+                        }
+                    }
+                    
+                    HStack(spacing: 4) {
+                        Text(getEmployerName(from: service))                            .font(.custom("Lexend", size: 16))
+                        
+                        if service.advertiser.isVerified {
+                            VerifiedBadge(size: 20)
+                        }
+                    }
+                    .offset(x: -20)
+
+                    Spacer()
+                    NavigationLink(destination: UserReviewsView()) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "star.fill")
+                                .foregroundColor(.yellow)
+                                .font(.system(size: 12))
+                            
+                            Text(String(format: "%.1f", service.rating))
+                                .font(.custom("Jellee", size: 18))
+                                .foregroundColor(.black)
+                            
+                            Text("(\(service.reviewCount))")
+                                .font(.custom("Lexend", size: 12))
+                                .foregroundColor(.gray)
+                        }
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+            .contentShape(Rectangle()) // Ez biztosítja, hogy a teljes terület kattintható legyen
+            .onTapGesture {
+                navigateToDetail = true
+            }
+            
+            Divider()
+                .overlay(Rectangle()
+                    .frame(height: 2))
+                .foregroundColor(.DesignSystem.fokekszin)
+            
+            
+                HStack {
+                    Text(service.name)
+                        .font(.custom("Lexend", size: 20))
+                        .foregroundColor(Color.DesignSystem.fokekszin)
+                        .onTapGesture {
+                                    navigateToDetail = true
+                                }
+                    
+                    Spacer()
+                    
+                    
+                
+            }
+                .padding(.bottom, -20)
+
+            
+            HStack {
+//               Text(service.description ?? "No description")
+//                   .font(.custom("Lexend", size: 15))
+//                   .foregroundColor(.black)
+//                   .lineLimit(nil)
+//                   .frame(width: 230, height: nil, alignment: .leading)
+                
+                if !service.description.isEmpty {
+                    Text(service.description)
+                        .font(.custom("Lexend", size: 14))
+                        .foregroundStyle(Color.DesignSystem.bordosszin)
+                        .lineLimit(2) // Maximum 2 sor
+                }
+                Spacer()
+                
+                ZStack {
+                    
+                    Circle()
+                        .fill(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .frame(width: 70, height: 70)
+                        .zIndex(0)
+                    
+                    VStack{
+                        Text("\(Int(totalAmount))")
+                            .font(.custom("Lexend", size: 14))
+                            .foregroundStyle(Color.DesignSystem.fenyozold)
+                            .zIndex(2)
+                        
+                        Text("Ft")
+                            .font(.custom("Jellee", size: 14))
+                            .foregroundStyle(Color.DesignSystem.fenyozold)
+                    }
+                    .offset(y:2)
+                }
+                
+                .overlay(
+                    Circle()
+                        .stroke(Color.DesignSystem.bordosszin, lineWidth: 2)
+                        .zIndex(1)
+                )
+                .offset(x: 5)
+
+            }
+            .padding(.bottom, -20)
+
+            
+            HStack(spacing: 4) {
+                
+                Button(action: {
+                    showLocationDetail.toggle()
+                }) {
+                    
+                Image(systemName: "mappin.circle.fill")
+                    .font(.custom("Lexend", size: 14))
+                    .foregroundColor(.DesignSystem.fokekszin)
+                
+                Text(formattedLocation)
+                    .font(.custom("Lexend", size: 14))
+                    .foregroundColor(.gray)
+                    .lineLimit(1)
+                
+
+                    Image(systemName: "chevron.right")
+                        .font(.custom("Lexend", size: 14))
+                        .foregroundColor(.DesignSystem.fokekszin)
+                }
+                .sheet(isPresented: $showLocationDetail) {
+                    LocationDetailView(location: service.location)
+                }
+            }
+            .padding(.bottom, -10)
+            
+            // JELENTKEZÉSI GOMB - JAVÍTOTT VERZIÓ
+            HStack {
+                if hasApplied {
+                    // Ha már jelentkezett
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Jelentkezve")
+                            .font(.custom("Lexend", size: 14))
+                            .foregroundColor(.green)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.green.opacity(0.1))
+                    .cornerRadius(20)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20)
+                            .stroke(Color.green, lineWidth: 1)
+                    )
+                } else {
+                    // Jelentkezés gomb - JAVÍTOTT
+                    Button(action: {
+                        applyForService()
+                    }) {
+                        HStack {
+                            if isApplying {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .tint(.white)
+                            } else {
+                                Image(systemName: "plus.circle.fill")
+                                Text("Jelentkezem")
+                                    .font(.custom("Lexend", size: 14))
+                            }
+                        }
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .foregroundStyle(.black)
+                        .background(
+                            RoundedRectangle(cornerRadius: 13)
+                                .fill(Color.DesignSystem.fokekszin.opacity(0.1))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 13)
+                                .stroke(Color.DesignSystem.fokekszin, lineWidth: 4)
+                        )
+                        .cornerRadius(13)
+                    }
+                    .buttonStyle(PlainButtonStyle()) // FONTOS: PlainButtonStyle hozzáadása
+                    .disabled(isApplying)
+                }
+                
+                Spacer()
+                
+                // Üzenet gomb
+                Button(action: { showChat.toggle() }) {
+                    Image(systemName: "message")
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.DesignSystem.fokekszin, lineWidth: 2)
+                        )
+                }
+                .buttonStyle(PlainButtonStyle()) // FONTOS: PlainButtonStyle hozzáadása
+                .sheet(isPresented: $showChat) {
+                    // ChatView(user: service.advertiser)
+                    Text("Üzenetek: \(service.advertiser.name)")
+                }
+                
+                // További opciók gomb
+                Button(action: { showingActionSheet = true }) {
+                    Image(systemName: "ellipsis.circle.fill")
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.DesignSystem.fokekszin, lineWidth: 2)
+                        )
+                }
+                .buttonStyle(PlainButtonStyle()) // FONTOS: PlainButtonStyle hozzáadása
+            }
+            .padding(.top, 8)
+            
+            if showApplicationResult {
+                Text(applicationResultMessage)
+                    .font(.custom("Lexend", size: 12))
+                    .foregroundColor(applicationResultMessage.contains("sikeres") ? .green : .red)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .cornerRadius(8)
+            }
+        }
+        .foregroundColor(.black)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .listRowBackground(Color.clear)
+        .background(
+            RoundedRectangle(cornerRadius: 25)
+                .fill(Color.white.opacity(0.7))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 25)
+                .stroke(Color.DesignSystem.fokekszin, lineWidth: 2)
+        )
+        .foregroundColor(.DesignSystem.fokekszin)
+        .font(.custom("Lexend", size: 18))
+        .accentColor(.DesignSystem.fokekszin)
+        .listRowInsets(EdgeInsets())
+        .padding(4)
+        .onAppear {
+            checkIfApplied()
+        }
+        .alert("Jelentkezés eredménye", isPresented: $showApplicationResult) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(applicationResultMessage)
+        }
+        // A ModernServiceCard2 végén található ez a rész:
+        .background(
+            NavigationLink(
+                destination: ServiceDetailView(service: service),
+                isActive: $navigateToDetail,
+                label: { EmptyView() }
+            )
+        )
+  }
+    
+    // MARK: - Jelentkezési funkciók
+    private func getEmployerName(from service: Service) -> String {
+        // Ha a description tartalmazza a nevet, használjuk azt
+        if service.description.contains("által kínált munka") {
+            return String(service.description.split(separator: " ").first ?? "")
+        }
+        // Egyébként az advertiser neve
+        return service.advertiser.name
+    }
+    private func applyForService() {
+        guard serverAuthManager.isAuthenticated else {
+            applicationResultMessage = "Munkára jelentkezéshez előbb be kell jelentkezned!"
+            showApplicationResult = true
+            return
+        }
+        
+        isApplying = true
+        
+        Task {
+            do {
+                let success = try await serverAuthManager.applyForWork(
+                    workId: service.id,
+                    applicantId: UserManager.shared.currentUser?.id ?? UUID(),
+                    applicantName: UserManager.shared.currentUser?.name ?? "Ismeretlen",
+                    serviceTitle: service.name,
+                    employerId: service.advertiser.id
+                )
+                
+                await MainActor.run {
+                    isApplying = false
+                    if success {
+                        hasApplied = true
+                        applicationResultMessage = "Sikeresen jelentkeztél a munkára!"
+                        showApplicationResult = true
+                        
+                        // 3 másodperc után eltüntetjük az üzenetet
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                            showApplicationResult = false
+                        }
+                    } else {
+                        applicationResultMessage = "A jelentkezés sikertelen. Próbáld újra később."
+                        showApplicationResult = true
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isApplying = false
+                    applicationResultMessage = "Hiba történt: \(error.localizedDescription)"
+                    showApplicationResult = true
+                }
+            }
+        }
+    }
+    
+    private func checkIfApplied() {
+        // Ellenőrizzük, hogy a felhasználó már jelentkezett-e erre a szolgáltatásra
+        Task {
+            let hasAppliedResult = await serverAuthManager.checkIfApplied(workId: service.id)
+            await MainActor.run {
+                self.hasApplied = hasAppliedResult
+            }
+        }
+    }
+}
+struct SearchView2_Previews: PreviewProvider {
+    static var previews: some View {
+        Group {
+            // Light mode preview
+                SearchView2(initialSearchText: "")
+                    .environmentObject(UserManager.shared)
+            
+            .previewDisplayName("Light Mode")
+            
+            // Dark mode preview
+            NavigationView {
+                SearchView2(initialSearchText: "")
+                    .environmentObject(UserManager.shared)
+            }
+            .preferredColorScheme(.dark)
+            .previewDisplayName("Dark Mode")
+            
+            // AI Bot version preview
+                SearchView2(initialSearchText: "Sample search", fromAIBot: true)
+                    .environmentObject(UserManager.shared)
+            
+            .previewDisplayName("From AI Bot")
+        }
+    }
+}
+
+#if DEBUG
+struct ModernServiceCard2_Previews: PreviewProvider {
+    static var previews: some View {
+        Group {
+            // Alap állapot - még nem jelentkeztek
+            ModernServiceCard2(
+                service: Service(
+                    id: UUID(),
+                    advertiser: User.preview,
+                    name: "Weboldal fejlesztés",
+                    description: "Modern, reszponzív weboldal készítése React-tal és Node.js-tel",
+                    rating: 4.8,
+                    reviewCount: 24,
+                    price: 50000,
+                    location: "Budapest, V. kerület",
+                    skills: ["React", "Node.js", "TypeScript", "CSS"],
+                    mediaURLs: [],
+                    availability: ServiceAvailability(serviceId: UUID()),
+                    typeofService: .technology,
+                    serviceOption: .premium
+                ),
+                servicePrice: .constant(50000)
+            )
+            .previewDisplayName("Alap állapot - Prémium")
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            
+            // Ingyenes szolgáltatás
+            ModernServiceCard2(
+                service: Service(
+                    id: UUID(),
+                    advertiser: User(
+                        name: "Kovács János",
+                        email: "kovacs.janos@example.com",
+                        username: "kovacsjanos",
+                        bio: "Tapasztalt kertész",
+                        rating: 4.9,
+                        location: Location(city: "Szeged", country: "Magyarország"),
+                        skills: [Skill(name: "Kertészkedés")],
+                        isVerified: true
+                    ),
+                    name: "Kertrendezés",
+                    description: "Profi kertrendezés és növényápolás",
+                    rating: 4.9,
+                    reviewCount: 15,
+                    price: 25000,
+                    location: "Szeged, Belváros",
+                    skills: ["Kertészkedés", "Növényápolás", "Favirágzás"],
+                    mediaURLs: [],
+                    availability: ServiceAvailability(serviceId: UUID()),
+                    typeofService: .gardening,
+                    serviceOption: .free
+                ),
+                servicePrice: .constant(25000)
+            )
+            .previewDisplayName("Ingyenes szolgáltatás")
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            
+            // Már jelentkeztek
+            ModernServiceCard2(
+                service: Service(
+                    id: UUID(),
+                    advertiser: User.preview,
+                    name: "Angol óra",
+                    description: "Üzleti angol és konverzációs órák",
+                    rating: 4.7,
+                    reviewCount: 32,
+                    price: 8000,
+                    location: "Online",
+                    skills: ["Angol", "Üzleti kommunikáció"],
+                    mediaURLs: [],
+                    availability: ServiceAvailability(serviceId: UUID()),
+                    typeofService: .education,
+                    serviceOption: .premium
+                ),
+                servicePrice: .constant(8000)
+            )
+            .previewDisplayName("Már jelentkeztek")
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            
+            // Jelentkezés közben
+            ModernServiceCard2(
+                service: Service(
+                    id: UUID(),
+                    advertiser: User.preview,
+                    name: "Fotózás",
+                    description: "Portré és termékfotózás",
+                    rating: 4.6,
+                    reviewCount: 18,
+                    price: 35000,
+                    location: "Budapest, XIII. kerület",
+                    skills: ["Fotózás", "Photoshop", "Portré"],
+                    mediaURLs: [],
+                    availability: ServiceAvailability(serviceId: UUID()),
+                    typeofService: .arts,
+                    serviceOption: .premium
+                ),
+                servicePrice: .constant(35000)
+            )
+            .previewDisplayName("Jelentkezés közben")
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            
+            // Sötét mód
+            ModernServiceCard2(
+                service: Service(
+                    id: UUID(),
+                    advertiser: User.preview,
+                    name: "Yoga óra",
+                    description: "Hatha yoga kezdőknek és haladóknak",
+                    rating: 4.9,
+                    reviewCount: 42,
+                    price: 6000,
+                    location: "Budapest, II. kerület",
+                    skills: ["Yoga", "Meditáció", "Testtudatosság"],
+                    mediaURLs: [],
+                    availability: ServiceAvailability(serviceId: UUID()),
+                    typeofService: .health,
+                    serviceOption: .premium
+                ),
+                servicePrice: .constant(6000)
+            )
+            .previewDisplayName("Sötét mód")
+            .padding()
+            .background(Color.black)
+            .preferredColorScheme(.dark)
+        }
+        .previewLayout(.sizeThatFits)
+    }
+}
+
+
+
+#endif
+
 // MARK: - Views
 
 struct SearchView2: View {
@@ -340,8 +906,8 @@ struct SearchView2: View {
     @State private var isRotating = false
     @State private var isPulsing = false
     @State private var isButtonAnimating = false
-    
-    
+    @State private var selectedServiceForDetail: Service?
+    @State private var selectedService: Service?
     @ObservedObject private var userManager = UserManager.shared
     
     // Add the initialSearchText property
@@ -364,9 +930,9 @@ struct SearchView2: View {
             ZStack {
 //                animatedBackgroundElements
                 
-                Image("hatter2")
-                                .resizable()
-                                .edgesIgnoringSafeArea(.all)
+//                Image("hatter2")
+//                                .resizable()
+//                                .edgesIgnoringSafeArea(.all)
                 
                 VStack(spacing: 0) {
 
@@ -460,6 +1026,7 @@ struct SearchView2: View {
                             .scaleEffect(1.2)
                         Spacer()
                     } else {
+                        
                         ScrollView {
                             LazyVStack(spacing: 8) {
                                 // Szűrés a serviceOption alapján
@@ -470,15 +1037,12 @@ struct SearchView2: View {
                                 
                                 
                                 if !viewModel.services.isEmpty || !viewModel.filteredUsers.isEmpty {
-                                    // Az összes elem ServiceCard-ként jelenik meg
-                                    //                                ForEach(viewModel.filteredUsers) { user in
-                                    //                                    NavigationLink(destination: UserDetailView(user: //user)) {
-                                    //                                        UserSearchCard(user: user)
-                                    //                                    }
-                                    //                                }
-                                    
                                     ForEach(viewModel.services) { service in
                                         ModernServiceCard2(service: service, servicePrice: .constant(service.price))
+                                            .onTapGesture {
+                                                // Navigáció a ServiceDetailView-hez
+                                                selectedService = service
+                                            }
                                     }
                                 }
                                 
@@ -491,6 +1055,20 @@ struct SearchView2: View {
                             }
                             .padding(8)
                         }
+                        .background(
+                            NavigationLink(
+                                destination: Group {
+                                    if let service = selectedServiceForDetail {
+                                        ServiceDetailView(service: service)
+                                    }
+                                },
+                                isActive: Binding(
+                                    get: { selectedServiceForDetail != nil },
+                                    set: { if !$0 { selectedServiceForDetail = nil } }
+                                ),
+                                label: { EmptyView() }
+                            )
+                        )
                     }
                     
                     // Gombok elhelyezése egymás mellett, de függetlenül mozognak
@@ -527,7 +1105,7 @@ struct SearchView2: View {
                         )
                         .cornerRadius(15)
                         .shadow(color: Color.DesignSystem.fokekszin, radius: 16, x: 4, y: 4)
-                        .padding(.vertical, 30)
+                        .padding(.vertical, 50)
 
                         
                         // Modern Expandable Button
@@ -621,6 +1199,7 @@ struct SearchView2: View {
                 .sheet(isPresented: $showFilters) {
                     FilterView2(filters: $viewModel.filters)
                 }
+                
                 .sheet(isPresented: $showServicePopup) {
                     ServiceCreationPopup2(
                         //                    viewModel: SettingsViewModel3(user: .preview),
@@ -1427,7 +2006,8 @@ struct ServiceCreationPopup2: View {
             .font(.custom("Lexend", size: 18))
             .accentColor(.DesignSystem.fokekszin)
             .listRowInsets(EdgeInsets())
-            .padding(4)            .foregroundStyle(
+            .padding(4)
+            .foregroundStyle(
                 LinearGradient(
                     colors: [.red, .blue],
                     startPoint: .leading,
@@ -2689,31 +3269,7 @@ struct UserSearchCard2: View {
     
     // MARK: - SearchView_Previews
 #if DEBUG
-    struct SearchView2_Previews: PreviewProvider {
-        static var previews: some View {
-            Group {
-                // Light mode preview
-                    SearchView2(initialSearchText: "")
-                        .environmentObject(UserManager.shared)
-                
-                .previewDisplayName("Light Mode")
-                
-                // Dark mode preview
-                NavigationView {
-                    SearchView2(initialSearchText: "")
-                        .environmentObject(UserManager.shared)
-                }
-                .preferredColorScheme(.dark)
-                .previewDisplayName("Dark Mode")
-                
-                // AI Bot version preview
-                    SearchView2(initialSearchText: "Sample search", fromAIBot: true)
-                        .environmentObject(UserManager.shared)
-                
-                .previewDisplayName("From AI Bot")
-            }
-        }
-    }
+
     
     
     
