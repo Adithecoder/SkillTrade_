@@ -22,6 +22,12 @@ struct StartWorkView: View {
     @State private var navigateToEmployeeView = false
     @State private var scannedWorkData: WorkData?
     
+    @State private var completionCode = "" // Új: lezárási kód
+        @State private var showingCompletionDialog = false // Új: lezárási dialógus
+        @State private var workStartTime: Date? // Új: munka kezdési ideje
+        @State private var elapsedTime: TimeInterval = 0 // Új: eltelt idő
+        @State private var timer: Timer? // Új: időzítő
+    
     let work: WorkData
 //    let onTap: () -> Void
 //    let onApplicationsTap: () -> Void
@@ -29,6 +35,7 @@ struct StartWorkView: View {
 //    let onShowQRCode2: () -> Void
     var body: some View {
         NavigationView {
+            
             ZStack {
                 // Háttér
 //                Image("hatter2")
@@ -36,20 +43,49 @@ struct StartWorkView: View {
 //                    .edgesIgnoringSafeArea(.all)
                 
                 VStack(spacing: 0) {
+                    HStack {
+                        Button(action: {
+
+                        }) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18))
+                                .foregroundColor(.DesignSystem.fokekszin)
+                                .padding(8)
+                                .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                                .clipShape(Circle())
+                        }
+                        
+                        Spacer()
+                        
+                        Text("Munkáid kezelése")
+                            .font(.custom("Lexend", size: 18))
+                            .foregroundColor(.DesignSystem.fokekszin)
+                            .fontWeight(.semibold)
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                            refreshWorks()
+                        }) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 16))
+                                .foregroundStyle( Color.DesignSystem.fokekszin )
+                                .padding(8)
+                                .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                                .clipShape(Circle())
+                        }
+                    }
+                    .padding(.horizontal)
                     // Header
                     VStack(spacing: 16) {
-                        Text("Munkáim Kezelése")
-                            .font(.custom("Jellee", size: 28))
-                            .foregroundColor(.DesignSystem.fokekszin)
-                            .multilineTextAlignment(.center)
-                            .padding(.top, -40)
+
                         
                         Text("Itt kezelheted a posztolt munkáidat és a jelentkezéseket")
                             .font(.custom("Lexend", size: 16))
                             .foregroundColor(.DesignSystem.descriptions)
                             .multilineTextAlignment(.center)
                     }
-                    .padding(.vertical, 20)
+                    .padding(.vertical, 10)
                     
                     
                     HStack(spacing: 12) {
@@ -71,6 +107,7 @@ struct StartWorkView: View {
 //
 //                            }
 //                        }
+                        
                     }
                     .foregroundColor(.DesignSystem.fokekszin)
                     .frame(maxWidth: .infinity)
@@ -103,18 +140,7 @@ struct StartWorkView: View {
                 }
                 
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: {
-                        refreshWorks()
-                    }) {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundColor(.DesignSystem.fokekszin)
-                            .font(.title3)
-                    }
-                }
-            }
+
             .sheet(item: $selectedWork) { work in
                 WorkDetailView(
                     work: work,
@@ -138,6 +164,16 @@ struct StartWorkView: View {
                     completion: handleQRScan
                 )
             }
+            // Add hozzá a .sheet modifierekhez
+            .sheet(isPresented: $showingCompletionDialog) {
+                WorkCompletionView(
+                    work: selectedWork ?? work,
+                    completionCode: completionCode,
+                    onComplete: { code in
+                        verifyAndCompleteWork(code: code)
+                    }
+                )
+            }
             .alert("Hiba", isPresented: $showingError) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -158,7 +194,38 @@ struct StartWorkView: View {
             )
         }
     }
-    
+    private func verifyAndCompleteWork(code: String) {
+        guard code == completionCode else {
+            errorMessage = "Hibás lezárási kód!"
+            showingError = true
+            return
+        }
+        
+        Task {
+            do {
+                if let work = selectedWork {
+                    try await WorkManager.shared.updateWorkStatus(
+                        workId: work.id,
+                        newStatus: "Befejezve",
+                        employerID: work.employerID
+                    )
+                    
+                    await MainActor.run {
+                        stopTimer()
+                        refreshWorks()
+                        showingCompletionDialog = false
+                        errorMessage = "Munka sikeresen befejezve!"
+                        showingError = true
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Hiba a munka befejezésekor: \(error.localizedDescription)"
+                    showingError = true
+                }
+            }
+        }
+    }
     private var emptyStateView: some View {
         VStack(spacing: 20) {
             Image(systemName: "briefcase.fill")
@@ -172,7 +239,7 @@ struct StartWorkView: View {
             
             NavigationLink(destination: SearchView2(initialSearchText: "")) {
                 Text("Új munka létrehozása")
-                    .font(.custom("Jellee", size: 18))
+                    .font(.custom("Lexend", size: 20))
                     .foregroundColor(.white)
                     .padding(.horizontal, 24)
                     .padding(.vertical, 12)
@@ -190,37 +257,89 @@ struct StartWorkView: View {
     }
     
     
-       private var workListView: some View {
-           ScrollView {
-               LazyVStack(spacing: 16) {
-                   ForEach(workManager.publishedWorks) { work in
-                       WorkCardView(
-                           work: work,
-                           onTap: {
-                               selectedWork = work
-                           },
-                           onApplicationsTap: {
-                               selectedWork = work
-                               loadApplications(for: work)
-                           },
-                           onShowQRCode: {
-                               selectedWork = work
-//                               navigateToQRCode = true // Navigáció indítása
-                           },
-                           onShowQRCode2: {
-//                               selectedWork = work
-                               navigateToQRCode = true // Navigáció indítása
-                           },
-                           onDelete: {
-                               deleteWork(work) // Új callback kezelése
-                           }
-                       )
-                       .id(refreshID)
-                   }
-               }
-               .padding()
-           }
-       }
+    private var workListView: some View {
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                ForEach(workManager.publishedWorks) { work in
+                    VStack(spacing: 8) {
+                        // Eltelt idő megjelenítése folyamatban lévő munkáknál
+                        if work.statusText == "Folyamatban" {
+                            HStack {
+                                Image(systemName: "clock.fill")
+                                    .foregroundColor(.orange)
+                                Text("Folyamatban: \(formattedElapsedTime(elapsedTime))")
+                                    .font(.custom("Lexend", size: 14))
+                                    .foregroundColor(.orange)
+                                Spacer()
+                            }
+                            .padding(.horizontal)
+                        }
+                        
+                        WorkCardView(
+                            work: work,
+                            onTap: {
+                                selectedWork = work
+                            },
+                            onApplicationsTap: {
+                                selectedWork = work
+                                loadApplications(for: work)
+                            },
+                            onShowQRCode: {
+                                selectedWork = work
+                            },
+                            onShowQRCode2: {
+                                navigateToQRCode = true
+                            },
+                            onDelete: {
+                                deleteWork(work)
+                            },
+                            onComplete: { // Új callback a befejezéshez
+                                selectedWork = work
+                                generateCompletionCode()
+                                showingCompletionDialog = true
+                            }
+                        )
+                        .id(refreshID)
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+    
+    private func generateCompletionCode() {
+        // 6 számjegyű véletlenszerű kód generálása
+        completionCode = String(format: "%06d", Int.random(in: 100000...999999))
+        
+        // Kód mentése a szerverre
+        if let work = selectedWork {
+            Task {
+                do {
+                    try await serverAuthManager.saveCompletionCode(
+                        workId: work.id,
+                        completionCode: completionCode
+                    )
+                    
+                    await MainActor.run {
+                        errorMessage = "✅ Lezárási kód generálva: \(completionCode)\n\nAdd meg ezt a kódot a munkavállalónak!"
+                        showingError = true
+                        
+                        // DEBUG: Konzolra kiírás
+                        print("🔐 LEZÁRÁSI KÓD GENERÁLVA:")
+                        print("   - Munka ID: \(work.id)")
+                        print("   - Munka cím: \(work.title)")
+                        print("   - Lezárási kód: \(completionCode)")
+                        print("   - Idő: \(Date())")
+                    }
+                } catch {
+                    await MainActor.run {
+                        errorMessage = "❌ Hiba a kód mentésekor: \(error.localizedDescription)"
+                        showingError = true
+                    }
+                }
+            }
+        }
+    }
     private func deleteWork(_ work: WorkData) {
            Task {
                do {
@@ -282,13 +401,18 @@ struct StartWorkView: View {
                     )
                     
                 case .startWork(let applicationId, let employeeId):
-                    // Itt kezdjük el a munkát és megnyitjuk a QR szkennert
+                    // Munka indítása és kezdési idő mentése
                     if let work = selectedWork {
                         try await serverAuthManager.updateWorkStatus(
                             workId: work.id,
                             status: "Folyamatban",
                             employerID: work.employerID
                         )
+                        // Kezdési idő mentése
+                        await MainActor.run {
+                            workStartTime = Date()
+                            startTimer()
+                        }
                         showingQRScanner = true
                     }
                 }
@@ -308,6 +432,32 @@ struct StartWorkView: View {
                 }
             }
         }
+    }
+    
+    // Időzítő indítása
+    private func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            if let startTime = workStartTime {
+                elapsedTime = Date().timeIntervalSince(startTime)
+            }
+        }
+    }
+
+    // Időzítő leállítása
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+        elapsedTime = 0
+        workStartTime = nil
+    }
+
+    // Formázott idő string
+    private func formattedElapsedTime(_ timeInterval: TimeInterval) -> String {
+        let hours = Int(timeInterval) / 3600
+        let minutes = Int(timeInterval) / 60 % 60
+        let seconds = Int(timeInterval) % 60
+        return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
     }
     
     private func handleQRScan(result: Result<ScanResult, ScanError>) {
@@ -360,22 +510,127 @@ struct StartWorkView: View {
         }
     }
 }
+struct WorkCompletionView: View {
+    let work: WorkData
+    let completionCode: String
+    let onComplete: (String) -> Void
+    
+    @Environment(\.dismiss) var dismiss
+    @State private var enteredCode = ""
+    @State private var isVerifying = false
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 30) {
+                VStack(spacing: 16) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(.blue)
+                    
+                    Text("Munka lezárása")
+                        .font(.custom("Jellee", size: 24))
+                        .foregroundColor(.DesignSystem.fokekszin)
+                    
+                    Text("A munka lezárásához add meg a lezárási kódot")
+                        .font(.custom("Lexend", size: 16))
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 40)
+                
+                VStack(spacing: 16) {
+                    Text("Lezárási kód:")
+                        .font(.custom("Lexend", size: 16))
+                        .foregroundColor(.primary)
+                    
+                    Text(completionCode)
+                        .font(.custom("Jellee", size: 32))
+                        .foregroundColor(.blue)
+                        .padding()
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(12)
+                }
+                
+                VStack(spacing: 12) {
+                    Text("Add meg a kódot:")
+                        .font(.custom("Lexend", size: 14))
+                        .foregroundColor(.gray)
+                    
+                    TextField("XXXXXX", text: $enteredCode)
+                        .font(.custom("Jellee", size: 24))
+                        .multilineTextAlignment(.center)
+                        .keyboardType(.numberPad)
+                        .padding()
+                        .background(Color(.systemGray6))
+                        .cornerRadius(12)
+                        .onChange(of: enteredCode) { newValue in
+                            // Csak számok és max 6 karakter
+                            let filtered = newValue.filter { "0123456789".contains($0) }
+                            enteredCode = String(filtered.prefix(6))
+                        }
+                }
+                
+                Spacer()
+                
+                Button(action: {
+                    isVerifying = true
+                    onComplete(enteredCode)
+                }) {
+                    HStack {
+                        if isVerifying {
+                            ProgressView()
+                                .tint(.white)
+                        }
+                        Text("Munka lezárása")
+                            .font(.custom("Jellee", size: 18))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(enteredCode.count == 6 ? Color.green : Color.gray)
+                    .cornerRadius(20)
+                }
+                .disabled(enteredCode.count != 6 || isVerifying)
+                
+                Button("Mégse") {
+                    dismiss()
+                }
+                .font(.custom("Lexend", size: 16))
+                .foregroundColor(.red)
+            }
+            .padding()
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Bezárás") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
 
 // Módosított WorkCardView
 
+// Módosított WorkCardView
 struct WorkCardView: View {
     let work: WorkData
     let onTap: () -> Void
     let onApplicationsTap: () -> Void
     let onShowQRCode: () -> Void
     let onShowQRCode2: () -> Void
-    let onDelete: () -> Void // Új callback a törléshez
+    let onDelete: () -> Void
+    let onComplete: () -> Void
+    
     @State private var applicationCount = 0
     @State private var isLoadingApplications = false
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var showingStatusUpdate = false
     @State private var showingDeleteAlert = false
+    @State private var completionCode = ""
+    @State private var isLoadingCode = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -383,20 +638,14 @@ struct WorkCardView: View {
             // Header
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    
-                    //                    Text(work.employerName)
-                    //                        .font(.custom("Lexend", size: 20))
-                    //                        .foregroundColor(.DesignSystem.descriptions)
-                    
-                    
                     Text(work.title)
                         .font(.custom("Jellee", size: 20))
                         .foregroundColor(.DesignSystem.fokekszin)
                         .lineLimit(2)
-                    
                 }
                 
                 Spacer()
+                
                 // QR kód megjelenítése gomb
                 if work.statusText == "Publikálva" || work.statusText == "Nem kezdődött el" {
                     Button(action: onShowQRCode) {
@@ -419,7 +668,6 @@ struct WorkCardView: View {
                     } label: {
                         Image(systemName: "pencil.circle.fill")
                             .foregroundStyle(.white)
-                        
                     }
                     .foregroundColor(.blue)
                 }
@@ -438,7 +686,6 @@ struct WorkCardView: View {
                     .background(Color.red)
                     .cornerRadius(10)
                 }
-
             }
             
             // Munka részletek
@@ -448,19 +695,12 @@ struct WorkCardView: View {
                         .font(.custom("Jellee", size: 18))
                         .foregroundColor(.green)
                     
-//                    Divider()
-//                        .frame(width: 20)
-                    
                     Spacer()
-                    
                     
                     Text(work.paymentType)
                         .font(.custom("Lexend", size: 12))
                         .foregroundColor(.gray)
                 }
-                
-
-                
             }
             
             // Készségek
@@ -478,129 +718,216 @@ struct WorkCardView: View {
                     }
                 }
             }
-//            if !work.location.isEmpty {
-//                VStack(alignment: .leading, spacing: 4) {
-//                    Label(work.location, systemImage: "mappin.circle.fill")
-//                        .font(.custom("Lexend", size: 12))
-//                        .foregroundColor(.gray)
-//                }
-//            }
-            HStack(spacing: 12) {
-                           // Jelentkezések gomb
-                           Button(action: {
-                               loadApplicationCount()
-                               onApplicationsTap()
-                           }) {
-                               HStack(spacing: 6) {
-                                   if isLoadingApplications {
-                                       ProgressView()
-                                           .scaleEffect(0.8)
-                                           .tint(.white)
-                                   } else {
-                                       Image(systemName: "person.3.fill")
-                                   }
-                                   
-                                   Text("Jelentkezések")
-                                       .font(.custom("Lexend", size: 14))
-                                   
-                                   if applicationCount > 0 {
-                                       Text("\(applicationCount)")
-                                           .font(.custom("Lexend", size: 12))
-                                           .padding(.horizontal, 6)
-                                           .padding(.vertical, 2)
-                                           .background(Color.white)
-                                           .foregroundColor(.blue)
-                                           .cornerRadius(8)
-                                   }
-                               }
-                               .foregroundColor(.white)
-                               .padding(.horizontal, 12)
-                               .padding(.vertical, 8)
-                               .background(Color.blue)
-                               .cornerRadius(10)
-                           }
-                           .disabled(isLoadingApplications)
-                           
-//                           // QR kód megjelenítése gomb
-//                           if work.statusText == "Publikálva" || work.statusText //       == "Nem kezdődött el" {
-//                               Button(action: onShowQRCode) {
-//                                   HStack(spacing: 6) {
-//                                       Image(systemName: "qrcode")
-//                                       Text("Infó")
-//                                           .font(.custom("Lexend", size: 14))
-//                                   }
-//                                   .foregroundColor(.white)
-//                                   .padding(.horizontal, 12)
-//                                   .padding(.vertical, 8)
-//                                   .background(Color.green)
-//                                   .cornerRadius(10)
-//                               }
-//                           }
+            
+            // LEZÁRÁSI KÓD - CSAK FOLYAMATBAN LÉVŐ MUNKÁKNAK
+            if work.statusText == "Folyamatban" {
+                completionCodeSection
+            }
+            
+            // Művelet gombok
+            actionButtons
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.white)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20)
+                        .stroke(Color.DesignSystem.fokekszin, lineWidth: 2)
+                )
+        )
+        .listRowInsets(EdgeInsets())
+        .padding(4)
+        .background(Color.white)
+        .cornerRadius(25)
+        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+        .onAppear {
+            // Csak a szükséges adatokat töltjük be
+            loadApplicationCount()
+        }
+        .task {
+            // Külön task a kód betöltésére
+            await loadCompletionCode()
+        }
+        .alert("Hiba", isPresented: $showError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(errorMessage)
+        }
+        .alert("Munka törlése", isPresented: $showingDeleteAlert) {
+            Button("Mégse", role: .cancel) { }
+            Button("Törlés", role: .destructive) {
+                onDelete()
+            }
+        } message: {
+            Text("Biztosan törölni szeretnéd ezt a munkát?")
+        }
+        .sheet(isPresented: $showingStatusUpdate) {
+            StatusUpdateView(
+                currentStatus: work.statusText,
+                onStatusUpdate: { newStatus in
+                    updateWorkStatus(newStatus)
+                }
+            )
+        }
+    }
+    
+    // MARK: - Külön view komponensek a komplexitás csökkentésére
+    
+    private var completionCodeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "lock.shield")
+                    .foregroundColor(.green)
+                    .font(.system(size: 14))
+                
+                Text("Lezárási kód")
+                    .font(.custom("Lexend", size: 12))
+                    .foregroundColor(.DesignSystem.fokekszin)
                 
                 Spacer()
-                Button(action: onShowQRCode2) {
+                
+                if isLoadingCode {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                } else if !completionCode.isEmpty {
+                    Button(action: {
+                        generateNewCode()
+                    }) {
+                        Text("Új kód")
+                            .font(.custom("Lexend", size: 10))
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
+            
+            if completionCode.isEmpty && !isLoadingCode {
+                Button(action: {
+                    generateNewCode()
+                }) {
+                    HStack {
+                        Image(systemName: "key.fill")
+                        Text("Kód generálása")
+                            .font(.custom("Lexend", size: 12))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.blue)
+                    .cornerRadius(8)
+                }
+            } else if isLoadingCode {
+                HStack {
+                    Text("Kód betöltése...")
+                        .font(.custom("Lexend", size: 12))
+                        .foregroundColor(.gray)
+                    Spacer()
+                    ProgressView()
+                        .scaleEffect(0.8)
+                }
+                .padding(8)
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(8)
+            } else {
+                HStack {
+                    Text(completionCode)
+                        .font(.custom("Jellee", size: 16))
+                        .foregroundColor(.green)
+                        .monospacedDigit()
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        UIPasteboard.general.string = completionCode
+                        errorMessage = "✓ Kód kimásolva: \(completionCode)"
+                        showError = true
+                    }) {
+                        Image(systemName: "doc.on.doc")
+                            .foregroundColor(.blue)
+                            .font(.system(size: 12))
+                    }
+                }
+                .padding(8)
+                .background(Color.green.opacity(0.1))
+                .cornerRadius(8)
+                
+                Text("Add meg ezt a kódot a munkavállalónak")
+                    .font(.custom("Lexend", size: 10))
+                    .foregroundColor(.gray)
+            }
+        }
+        .padding(8)
+        .background(Color.gray.opacity(0.05))
+        .cornerRadius(8)
+    }
+    
+    private var actionButtons: some View {
+        HStack(spacing: 12) {
+            // Jelentkezések gomb
+            Button(action: {
+                loadApplicationCount()
+                onApplicationsTap()
+            }) {
+                HStack(spacing: 6) {
+                    if isLoadingApplications {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "person.3.fill")
+                    }
+
+                    
+                    if applicationCount > 0 {
+                        Text("\(applicationCount)")
+                            .font(.custom("Lexend", size: 12))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.white)
+                            .foregroundColor(.blue)
+                            .cornerRadius(8)
+                    }
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.blue)
+                .cornerRadius(10)
+            }
+            .disabled(isLoadingApplications)
+            
+            // Befejezés gomb - csak folyamatban lévő munkáknál
+            if work.statusText == "Folyamatban" {
+                Button(action: onComplete) {
                     HStack(spacing: 6) {
-                        Image(systemName: "qrcode")
-                        Text("QR Kód")
+                        Image(systemName: "checkmark.circle.fill")
+                        Text("Befejezés")
                             .font(.custom("Lexend", size: 14))
                     }
                     .foregroundColor(.white)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color.yellow)
+                    .background(Color.green)
                     .cornerRadius(10)
                 }
-                           
-                           
-                           // Részletek gomb
-//                           Button(action: onTap) {
-//                               Image(systemName: "chevron.right")
-//                                   .foregroundColor(.DesignSystem.fokekszin)
-//                                   .font(.system(size: 16, weight: .medium))
-//                           }
-                       }
-                   }
-                   .padding()
-                   .background(
-                       RoundedRectangle(cornerRadius: 20)
-                           .fill(Color.white)
-                           .overlay(
-                               RoundedRectangle(cornerRadius: 20)
-                                   .stroke(Color.DesignSystem.fokekszin, lineWidth: 2)
-                           )
-                   )
-                   .listRowInsets(EdgeInsets())
-                   .padding(4)
-
-                   .background(Color.white)
-                   .cornerRadius(25)
-                   .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
-                   .onAppear {
-                       loadApplicationCount()
-                   }
-                   .alert("Hiba", isPresented: $showError) {
-                       Button("OK", role: .cancel) { }
-                   } message: {
-                       Text(errorMessage)
-                   }
-                   .alert("Munka törlése", isPresented: $showingDeleteAlert) {
-                       Button("Mégse", role: .cancel) { }
-                       Button("Törlés", role: .destructive) {
-                           onDelete() // Meghívjuk a callback-et
-                       }
-                   } message: {
-                       Text("Biztosan törölni szeretnéd ezt a munkát?")
-                   }
-                   .sheet(isPresented: $showingStatusUpdate) {
-                       StatusUpdateView(
-                           currentStatus: work.statusText,
-                           onStatusUpdate: { newStatus in
-                               updateWorkStatus(newStatus)
-                           }
-                       )
-                   }
-        
-               }
+            }
+            
+            Spacer()
+            
+            Button(action: onShowQRCode2) {
+                HStack(spacing: 6) {
+                    Image(systemName: "qrcode")
+                    Text("QR Kód")
+                        .font(.custom("Lexend", size: 14))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.yellow)
+                .cornerRadius(10)
+            }
+        }
+    }
     
     private var statusBadge: some View {
         Text(work.statusText)
@@ -627,6 +954,8 @@ struct WorkCardView: View {
         }
     }
     
+    // MARK: - Függvények
+    
     private func loadApplicationCount() {
         guard !isLoadingApplications else { return }
         
@@ -642,20 +971,60 @@ struct WorkCardView: View {
             } catch {
                 await MainActor.run {
                     isLoadingApplications = false
-                    // Csak logoljuk a hibát, de ne jelenítsük meg a felhasználónak
                     print("❌ Hiba a jelentkezések számának lekérésekor: \(error)")
-                    
-                    // Ha nem hitelesítési hiba, akkor mutassuk meg
-                    if (error as NSError).code != 401 {
-                        errorMessage = "Nem sikerült betölteni a jelentkezések számát"
-                        showError = true
-                    }
                 }
             }
         }
     }
     
-    // FIX: Implement status update here for WorkCardView
+    private func loadCompletionCode() async {
+        await MainActor.run {
+            isLoadingCode = true
+        }
+        
+        do {
+            let code = try await ServerAuthManager.shared.getCompletionCode(workId: work.id)
+            await MainActor.run {
+                self.completionCode = code
+                self.isLoadingCode = false
+            }
+        } catch {
+            await MainActor.run {
+                self.isLoadingCode = false
+                print("❌ Nincs lezárási kód: \(error)")
+            }
+        }
+    }
+    
+    private func generateNewCode() {
+        let newCode = String(format: "%06d", Int.random(in: 100000...999999))
+        
+        Task {
+            await MainActor.run {
+                isLoadingCode = true
+            }
+            
+            do {
+                try await ServerAuthManager.shared.saveCompletionCode(
+                    workId: work.id,
+                    completionCode: newCode
+                )
+                await MainActor.run {
+                    self.completionCode = newCode
+                    self.isLoadingCode = false
+                    self.errorMessage = "✅ Kód generálva: \(newCode)"
+                    self.showError = true
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoadingCode = false
+                    self.errorMessage = "❌ Hiba a kód mentésekor: \(error.localizedDescription)"
+                    self.showError = true
+                }
+            }
+        }
+    }
+    
     private func updateWorkStatus(_ status: String) {
         Task {
             do {
@@ -673,7 +1042,6 @@ struct WorkCardView: View {
         }
     }
 }
-
 // WorkQRCodeView.swift
 import SwiftUI
 import CoreImage.CIFilterBuiltins
@@ -696,14 +1064,47 @@ struct WorkQRCodeView: View {
             
             ScrollView {
                 VStack(spacing: 30) {
-                    // Header
+                    HStack {
+                        Button(action: {
+                            presentationMode.wrappedValue.dismiss()
+}) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18))
+                                .foregroundColor(.DesignSystem.fokekszin)
+                                .padding(8)
+                                .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                                .clipShape(Circle())
+                        }
+                        
+                        Spacer()
+                        
+                        Text("Munka adatai")
+                            .font(.custom("Lexend", size: 18))
+                            .foregroundColor(.DesignSystem.fokekszin)
+                            .fontWeight(.semibold)
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                        }) {
+                            Image(systemName: "qrcode.viewfinder")
+                                .font(.system(size: 16))
+                                .foregroundStyle(Color.DesignSystem.fokekszin)
+                                .padding(8)
+                                .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                                .clipShape(Circle())
+                        }
+                    }
+                    
                     VStack(spacing: 16) {
                         
                         
                         Text("Munka QR Kódja")
-                            .font(.custom("Jellee", size: 28))
+                            .font(.custom("Jellee", size: 22))
                             .foregroundColor(.DesignSystem.fokekszin)
-                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal)
+                            .padding(.bottom, -20)
                         
                     }
                     .padding(.top, 20)
@@ -780,11 +1181,16 @@ struct WorkQRCodeView: View {
                     .cornerRadius(20)
                     
                     // Munka információk
+                    // A felirat külön
+                    Text("Munka adatai")
+                        .font(.custom("Jellee", size: 22))
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                        .padding(.bottom, -20)
+
+                    // A tartalom
                     VStack(alignment: .leading, spacing: 16) {
-                        Text("Munka adatai")
-                            .font(.custom("Jellee", size: 22))
-                            .foregroundColor(.DesignSystem.fokekszin)
-                        
                         InfoRowQR(icon: "briefcase", title: "Munka neve", value: work.title)
                         InfoRowQR(icon: "person", title: "Munkáltató", value: work.employerName)
                         InfoRowQR(icon: "dollarsign.circle", title: "Fizetés", value: "\(Int(work.wage)) Ft")
@@ -806,7 +1212,6 @@ struct WorkQRCodeView: View {
                     .listRowInsets(EdgeInsets())
                     .padding(4)
                     .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
-                    
                     // Művelet gombok
                     VStack(spacing: 12) {
                         
@@ -861,8 +1266,7 @@ struct WorkQRCodeView: View {
                 .padding(.horizontal, 16)
             }
         }
-        .navigationBarTitle("QR Kód", displayMode: .inline)
-        .navigationBarBackButtonHidden(false)
+        .navigationBarBackButtonHidden(true)
     }
     
     private func generateQRCode(from work: WorkData) -> UIImage? {

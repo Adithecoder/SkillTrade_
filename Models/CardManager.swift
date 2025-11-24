@@ -197,6 +197,18 @@ class CardManager: ObservableObject {
                throw error
            }
        }
+    
+    func enableApplePay() {
+            // Itt lehet további logika, pl.:
+            // - Szerver kommunikáció, hogy a felhasználó engedélyezte az Apple Pay-t
+            // - Lokális adatbázis frissítése
+            // - UI frissítése
+            print("🍎 Apple Pay engedélyezve a felhasználó számára")
+        }
+        
+        var isApplePayEnabled: Bool {
+            UserDefaults.standard.bool(forKey: "applePayEnabled")
+        }
     // MARK: - Server Communication
     private func saveCardToServer(_ card: Card) async throws {
         guard let token = serverAuthManager.getAuthToken() else {

@@ -1365,4 +1365,3 @@ public struct CardValidation {
     
 }
 
-// ... rest of Models.swift unchanged ...

@@ -28,7 +28,48 @@ struct LocationDetailView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
-                // Valódi MapKit térkép
+                HStack {
+                    Button(action: {
+                        dismiss()
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 18))
+                            .foregroundColor(.DesignSystem.fokekszin)
+                            .padding(8)
+                            .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                            .clipShape(Circle())
+                    }
+                    
+                    Spacer()
+                    
+                    Text("Hely megtekintése")
+                        .font(.custom("Lexend", size: 18))
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .fontWeight(.semibold)
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        if !annotationItems.isEmpty {
+                            Button(action: openInMaps) {
+                                Image(systemName: "arrow.triangle.turn.up.right.circle.fill")
+                                    .foregroundColor(.DesignSystem.fokekszin)
+                            }
+                        }
+                    }) {
+                        Image(systemName: "arrow.triangle.turn.up.right.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle( Color.DesignSystem.fokekszin )
+                            .padding(8)
+                            .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                            .clipShape(Circle())
+                    }
+                    
+
+
+                }
+                .padding(.horizontal)
+                
                 ZStack {
                     Map(coordinateRegion: $region, annotationItems: annotationItems) { annotation in
                         MapMarker(coordinate: annotation.coordinate, tint: .DesignSystem.fokekszin)
@@ -108,7 +149,7 @@ struct LocationDetailView: View {
                 // Bezárás gomb
                 Button(action: { dismiss() }) {
                     Text("Bezárás")
-                        .font(.custom("Jellee", size: 18))
+                        .font(.custom("Lexend", size: 20))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding()
@@ -121,20 +162,20 @@ struct LocationDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Vissza") {
-                        dismiss()
-                    }
-                    .font(.custom("Lexend", size: 20))
-                    .foregroundColor(.DesignSystem.fokekszin)
+//                    Button("Vissza") {
+//                        dismiss()
+//                    }
+//                    .font(.custom("Lexend", size: 20))
+//                    .foregroundColor(.DesignSystem.fokekszin)
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    if !annotationItems.isEmpty {
-                        Button(action: openInMaps) {
-                            Image(systemName: "arrow.triangle.turn.up.right.circle.fill")
-                                .foregroundColor(.DesignSystem.fokekszin)
-                        }
-                    }
+//                    if !annotationItems.isEmpty {
+//                        Button(action: openInMaps) {
+//                            Image(systemName: "arrow.triangle.turn.up.right.circle.fill")
+//                                .foregroundColor(.DesignSystem.fokekszin)
+//                        }
+//                    }
                 }
             }
         }

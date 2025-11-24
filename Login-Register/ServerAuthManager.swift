@@ -1141,6 +1141,12 @@ class ServerAuthManager: ObservableObject {
             }
         }
         
+    // ServerAuthManager.swift-hez add hozzá:
+    func removeEmployeeFromWork(workId: UUID, employeeId: UUID) async throws -> Bool {
+        // Itt implementáld a backend hívást
+        // amely eltávolítja a dolgozót a munkából
+        return true // placeholder
+    }
     func updateApplicationStatus(applicationId: String, status: String) async throws {
           guard isAuthenticated,
                 let token = UserDefaults.standard.string(forKey: "authToken"),
@@ -1394,7 +1400,122 @@ class ServerAuthManager: ObservableObject {
         }
     }
     
-    // MUNKA STÁTUSZ FRISSÍTÉSE
+    // ServerAuthManager.swift - JAVÍTOTT VERZIÓ
+    func saveCompletionCode(workId: UUID, completionCode: String) async throws {
+        guard isAuthenticated, let token = UserDefaults.standard.string(forKey: "authToken") else {
+            throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Nincs érvényes token"])
+        }
+        
+        guard let url = URL(string: "\(baseURL)/works/\(workId.uuidString)/completion-code") else {
+            throw NSError(domain: "Network", code: 400, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen URL"])
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let body: [String: Any] = [
+            "completionCode": completionCode
+        ]
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            throw error
+        }
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "Network", code: 500, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen válasz"])
+        }
+        
+        if httpResponse.statusCode != 200 {
+            let errorResponse = try JSONDecoder().decode(ErrorResponse.self, from: data)
+            throw NSError(domain: "Server", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.message])
+        }
+    }
+
+    func getCompletionCode(workId: UUID) async throws -> String {
+        guard isAuthenticated, let token = UserDefaults.standard.string(forKey: "authToken") else {
+            throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Nincs érvényes token"])
+        }
+        
+        guard let url = URL(string: "\(baseURL)/works/\(workId.uuidString)/completion-code") else {
+            throw NSError(domain: "Network", code: 400, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen URL"])
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "Network", code: 500, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen válasz"])
+        }
+        
+        if httpResponse.statusCode == 200 {
+            let response = try JSONDecoder().decode(CompletionCodeResponse.self, from: data)
+            return response.completionCode
+        } else if httpResponse.statusCode == 404 {
+            throw NSError(domain: "CompletionCodeError", code: 404, userInfo: [
+                NSLocalizedDescriptionKey: "Nincs lezárási kód mentve ehhez a munkához. Kérj kódot a munkáltatótól."
+            ])
+        } else {
+            let errorResponse = try JSONDecoder().decode(ErrorResponse.self, from: data)
+            throw NSError(domain: "Server", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.message])
+        }
+    }
+
+    // ServerAuthManager.swift - Add hozzá ezt a metódust
+    // ServerAuthManager.swift - Ellenőrizd, hogy ez a metódus létezik és helyes
+    func completeWorkAsEmployee(workId: UUID, employeeId: UUID) async throws -> Bool {
+        guard isAuthenticated, let token = UserDefaults.standard.string(forKey: "authToken") else {
+            throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Nincs érvényes token"])
+        }
+        
+        // ✅ HELYES URL: /api/works/:workId/complete (ez már létezik a szerveren)
+        guard let url = URL(string: "\(baseURL)/works/\(workId.uuidString)/complete") else {
+            throw NSError(domain: "Network", code: 400, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen URL"])
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let body: [String: Any] = [
+            "employeeId": employeeId.uuidString
+        ]
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            throw error
+        }
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "Network", code: 500, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen válasz"])
+        }
+        
+        if httpResponse.statusCode == 200 {
+            return true
+        } else {
+            let errorResponse = try JSONDecoder().decode(ErrorResponse.self, from: data)
+            throw NSError(domain: "Server", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.message])
+        }
+    }
+    // Segéd struktúra
+    struct CompletionCodeResponse: Codable {
+        let completionCode: String
+        let hasCode: Bool
+    }
+    
+    // ServerAuthManager.swift - Javított updateWorkStatus
     func updateWorkStatus(workId: UUID, status: String, employerID: UUID) async throws -> Bool {
         guard isAuthenticated, let token = UserDefaults.standard.string(forKey: "authToken") else {
             throw NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Nincs érvényes token"])
@@ -1420,17 +1541,29 @@ class ServerAuthManager: ObservableObject {
             throw error
         }
         
+        print("🔧 Munka státusz frissítése küldés:")
+        print("  - URL: \(url)")
+        print("  - Munka ID: \(workId.uuidString)")
+        print("  - Státusz: \(status)")
+        print("  - Munkáltató ID: \(employerID.uuidString)")
+        
         let (data, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw NSError(domain: "Network", code: 500, userInfo: [NSLocalizedDescriptionKey: "Érvénytelen válasz"])
         }
         
+        print("📥 Státusz frissítés válasza: \(httpResponse.statusCode)")
+        
         if httpResponse.statusCode == 200 {
+            print("✅ Munka státusza sikeresen frissítve")
             return true
         } else {
+            // Részletes hibaüzenet
             let errorResponse = try JSONDecoder().decode(ErrorResponse.self, from: data)
-            throw NSError(domain: "Server", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.message])
+            let errorMessage = "Szerver hiba (\(httpResponse.statusCode)): \(errorResponse.message)"
+            print("❌ \(errorMessage)")
+            throw NSError(domain: "Server", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorMessage])
         }
     }
     

@@ -72,6 +72,42 @@ struct RegisterView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
+                HStack {
+                    Button(action: {
+                        dismiss()
+
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 18))
+                            .foregroundStyle(LinearGradient(gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]),
+                                                            startPoint: .leading,
+                                                            endPoint: .trailing))
+                            .padding(8)
+                            .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                            .clipShape(Circle())
+                    }
+                    
+                    Spacer()
+                    
+                    Text("Regisztráció")
+                        .font(.custom("Lexend", size: 18))
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .fontWeight(.semibold)
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                    }) {
+                        Image(systemName: "person.crop.circle.fill.badge.plus")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Color.DesignSystem.fokekszin)
+                            .padding(8)
+                            .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                            .clipShape(Circle())
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 20)
                 VStack(spacing: 20) {
                     
                     Image(systemName: "person.crop.circle.fill.badge.plus")
@@ -256,17 +292,7 @@ struct RegisterView: View {
                     .padding(.horizontal)
                 }
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Mégse") {
-                        dismiss()
-                    }
-                    .font(.custom("Lexend", size: 17))
-                    .foregroundStyle(LinearGradient(gradient: Gradient(colors: [.DesignSystem.fokekszin, .DesignSystem.descriptions]),
-                                                    startPoint: .leading,
-                                                    endPoint: .trailing))
-                }
-            }
+
         }
         .sheet(isPresented: $showLogin) {
             LoginView()
@@ -342,10 +368,52 @@ struct TermsView: View {
     
     var body: some View {
         NavigationStack {
+            
+            HStack {
+                Button(action: {
+                    dismiss()
+
+                }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 18))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.red, .blue],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                }
+                
+                Spacer()
+                
+                Text("Felhasználási feltételek")
+                    .font(.custom("Lexend", size: 18))
+                    .foregroundColor(.DesignSystem.fokekszin)
+                    .fontWeight(.semibold)
+                
+                Spacer()
+                
+                Button(action: {
+                }) {
+                    Image(systemName: "book")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Color.DesignSystem.fokekszin)
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                }
+            }
+            .padding(.horizontal)
+            .padding(.top, 20)
+            
             // Egyetlen ScrollViewReader, hogy a gombok közvetlenül tudjanak görgetni
             ScrollViewReader { proxy in
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Felhasználási feltételek")
+                    Text("Felhasználási feltételeink")
                         .font(.custom("Jellee", size: 25))
                         .bold()
                     
@@ -392,9 +460,10 @@ struct TermsView: View {
                                 .id("Általános")
                             Text("A jelen Szabályzatban nem szabályozott kérdésekre, valamint jelen Szabályzat értelmezésére a magyar jog az irányadó, különös tekintettel a Polgári Törvénykönyvről szóló 2013. évi V. törvény („Ptk.”) és az elektronikus kereskedelmi szolgáltatások, valamint az információs társadalommal összefüggő szolgáltatások egyes kérdéseiről szóló 2001. évi CVIII. törvény vonatkozó rendelkezéseire. A vonatkozó jogszabályok kötelező rendelkezései a felekre külön kikötés nélkül is irányadók.")
                             Text("Hatály az Általános Szerződési Feltételek (ÁSZF) módosítása")
+                            
 
-                            Divider()
-                                .overlay(Rectangle().frame(width: 2))
+                            Rectangle()
+                                .frame(height: 2)
                                 .foregroundColor(.DesignSystem.descriptions)
                             
                             // 2. szakasz
@@ -406,8 +475,8 @@ struct TermsView: View {
                             Text("További személyes adatok kezelése törvényi felhatalmazáson alapulhat, amelynek célja jogszabályi kötelezettségek teljesítése. Kezelt adatok: adószám, adóazonosító jel, TAJ szám, bankszámlaszám stb.")
 
                             
-                            Divider()
-                                .overlay(Rectangle().frame(width: 2))
+                            Rectangle()
+                                .frame(height: 2)
                                 .foregroundColor(.DesignSystem.descriptions)
                             
                             // 2. szakasz
@@ -418,8 +487,8 @@ struct TermsView: View {
                             
 
 
-                            Divider()
-                                .overlay(Rectangle().frame(width: 2))
+                            Rectangle()
+                                .frame(height: 2)
                                 .foregroundColor(.DesignSystem.descriptions)
                         }
                         .padding(.bottom, 2)
@@ -429,19 +498,19 @@ struct TermsView: View {
                 }
                 .padding()
             }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Bezárás") { dismiss() }
-                        .font(.custom("Lexend", size: 17))
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [.red, .blue],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                }
-            }
+//            .toolbar {
+//                ToolbarItem(placement: .topBarTrailing) {
+//                    Button("Bezárás") { dismiss() }
+//                        .font(.custom("Lexend", size: 17))
+//                        .foregroundStyle(
+//                            LinearGradient(
+//                                colors: [.red, .blue],
+//                                startPoint: .leading,
+//                                endPoint: .trailing
+//                            )
+//                        )
+//                }
+//            }
         }
     }
 }

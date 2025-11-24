@@ -336,7 +336,6 @@ struct LoginView: View {
 //                            .shadow(color: Color.black.opacity(0.05), radius: 5, y: 2)
                         
                         Button(action: {
-                            print("🎯 Regisztráció gomb megnyomva")
                             showRegister = true
                         }) {
                             Text("Nincs még fiókod? Regisztrálj!")

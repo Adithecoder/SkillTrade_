@@ -4,6 +4,7 @@ import DesignSystem
 struct ProfilView: View {
     @EnvironmentObject var userManager: UserManager
     @StateObject private var serverAuth = ServerAuthManager.shared
+    @StateObject private var profileImageManager = ProfileImageManager.shared
     @State private var showingEditProfile = false
     @State private var showingServerUsers = false
     @State private var showingAdminView = false
@@ -15,13 +16,68 @@ struct ProfilView: View {
     @State private var showingAllReviews = false
     var body: some View {
         NavigationStack {
+            
+            HStack {
+                Button(action: {
+
+                }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 18))
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                }
+                NavigationLink(isActive: $showingAdminView) {
+                    AdminView()
+                } label: {
+                    Image(systemName: "shield")
+                        .font(.system(size: 16))
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                }
+                Spacer()
+                
+                Text("Profil")
+                    .font(.custom("Lexend", size: 18))
+                    .foregroundColor(.DesignSystem.fokekszin)
+                    .fontWeight(.semibold)
+                
+                Spacer()
+                
+                Button(action: {
+
+                }) {
+                    Image(systemName: "direktnincsneve")
+                        .font(.system(size: 16))
+                        .foregroundStyle( Color.DesignSystem.fokekszin )
+                        .padding(8)
+                        .background(Color.clear)
+                        .clipShape(Circle())
+                }
+                
+                Button(action: {
+                    showingEditProfile = true
+
+                }) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 16))
+                        .foregroundStyle( Color.DesignSystem.fokekszin )
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                }
+            }
+            .padding(.horizontal)
             ScrollView {
                 VStack(spacing: 20) {
                     
-                    Text(NSLocalizedString("Profiladatok", comment:"" ))
-                        .font(.custom("Jellee", size: 30))
-                        .foregroundColor(Color.DesignSystem.fokekszin) // Dinamikus színváltás
-                        .multilineTextAlignment(.center)
+//                          Text(NSLocalizedString("Profiladatok", comment:"" ))
+//                              .font(.custom("Jellee", size: 30))
+//                              .foregroundColor(Color.DesignSystem.fokekszin) // Dinamikus //      színváltás
+//                              .multilineTextAlignment(.center)
                     
                     // Profilkép és alapadatok
                     profileHeader
@@ -57,39 +113,39 @@ struct ProfilView: View {
                 }
             }
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    if isAdminUser {
-                        Button {
-                            showingAdminView = true
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "shield.fill")
-                                    .font(.system(size: 14))
-                                Text("Admin")
-                                    .font(.custom("Lexend", size: 16))
-                            }
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(
-                                LinearGradient(
-                                    gradient: Gradient(colors: [.red, .orange]),
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .cornerRadius(10)
-                                     }
-                                 }
-                             }
+//                ToolbarItem(placement: .navigationBarLeading) {
+//                    if isAdminUser {
+//                        Button {
+//                            showingAdminView = true
+//                        } label: {
+//                            HStack(spacing: 6) {
+//                                Image(systemName: "shield.fill")
+//                                    .font(.system(size: 14))
+//                                Text("Admin")
+//                                    .font(.custom("Lexend", size: 16))
+//                            }
+//                            .foregroundColor(.white)
+//                            .padding(.horizontal, 12)
+//                            .padding(.vertical, 8)
+//                            .background(
+//                                LinearGradient(
+//                                    gradient: Gradient(colors: [.red, .orange]),
+//                                    startPoint: .leading,
+//                                    endPoint: .trailing
+//                                )
+//                            )
+//                            .cornerRadius(10)
+//                                     }
+//                                 }
+//                             }
                 
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Szerkesztés") {
-                        showingEditProfile = true
-                    }
-                    .font(.custom("Lexend", size: 17))
-                    .foregroundStyle(Color.DesignSystem.fokekszin)
-                }
+//                ToolbarItem(placement: .navigationBarTrailing) {
+//                    Button("Szerkesztés") {
+//                        showingEditProfile = true
+//                    }
+//                    .font(.custom("Lexend", size: 17))
+//                    .foregroundStyle(Color.DesignSystem.fokekszin)
+//                }
             }
             .sheet(isPresented: $showingEditProfile) {
                 EditProfileView()
@@ -155,7 +211,7 @@ struct ProfilView: View {
                             .font(.custom("Jellee", size: 48))
                             .foregroundColor(.white)
                     } else {
-                        Image(systemName: "person.circle.fill")
+                        Image(systemName: "person")
                             .font(.system(size: 50))
                             .foregroundColor(.white)
                     }
@@ -227,7 +283,7 @@ struct ProfilView: View {
                             .overlay(Rectangle()
                                 .frame(width: 2))
                             .foregroundColor(.DesignSystem.descriptions)
-                        
+                            .padding(5)
                         VStack{
                             Text("Követések")
                                 .font(.custom("Lexend", size: 18))
@@ -867,7 +923,8 @@ struct ProfilView: View {
     // MARK: - Profilkép feltöltése
     private func uploadProfileImage() {
         guard let imageData = profileImageData else { return }
-        
+        profileImageManager.updateProfileImage(imageData) // 👈 Új
+
         serverAuth.uploadProfileImage(imageData) { success in
             if success {
                 print("✅ Profilkép sikeresen feltöltve")
@@ -1027,6 +1084,45 @@ struct EditProfileView: View {
     
     var body: some View {
         NavigationStack {
+            
+            HStack {
+                Button(action: {
+
+                    dismiss()
+                }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 18))
+                        .foregroundColor(.DesignSystem.fokekszin)
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                }
+
+                Spacer()
+                
+                Text("Profil szerkesztése")
+                    .font(.custom("Lexend", size: 18))
+                    .foregroundColor(.DesignSystem.fokekszin)
+                    .fontWeight(.semibold)
+                
+                Spacer()
+                
+
+                
+                Button(action: {
+
+                    saveProfile()
+                }) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 16))
+                        .foregroundStyle( Color.DesignSystem.fokekszin )
+                        .padding(8)
+                        .background(Color.DesignSystem.fokekszin.opacity(0.1))
+                        .clipShape(Circle())
+                }
+            }
+            .padding(.horizontal)
+            .padding(.top, 10)
             Form {
                 Section(header: Text("Alapadatok").font(.custom("Jellee", size: 16))) {
                     
@@ -1132,24 +1228,24 @@ struct EditProfileView: View {
                 }
             }
             
-            .navigationTitle("Profil szerkesztése")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Mégse") {
-                        dismiss()
-                    }
-                    .font(.custom("Lexend", size: 17))
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Mentés") {
-                        saveProfile()
-                    }
-                    .font(.custom("Lexend", size: 17))
-                    .bold()
-                }
-            }
+//            .navigationTitle("Profil szerkesztése")
+//            .navigationBarTitleDisplayMode(.inline)
+//            .toolbar {
+//                ToolbarItem(placement: .navigationBarLeading) {
+//                    Button("Mégse") {
+//                        dismiss()
+//                    }
+//                    .font(.custom("Lexend", size: 17))
+//                }
+//
+//                ToolbarItem(placement: .navigationBarTrailing) {
+//                    Button("Mentés") {
+//                        saveProfile()
+//                    }
+//                    .font(.custom("Lexend", size: 17))
+//                    .bold()
+//                }
+//            }
             .onAppear {
                 loadCurrentUserData()
             }
@@ -1746,7 +1842,7 @@ struct ProfileImage: View {
     let size: CGFloat
     let showEditButton: Bool
     let onEditTapped: (() -> Void)?
-    
+    @StateObject private var profileImageManager = ProfileImageManager.shared
     @StateObject private var serverAuth = ServerAuthManager.shared
     @State private var localImageData: Data?
     
@@ -1764,7 +1860,8 @@ struct ProfileImage: View {
     
     var body: some View {
         ZStack {
-            if let imageData = getImageData(),
+//            if let imageData = getImageData(),
+               if let imageData = profileImageManager.profileImageData,
                let uiImage = UIImage(data: imageData) {
                 Image(uiImage: uiImage)
                     .resizable()
