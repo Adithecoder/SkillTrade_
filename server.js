@@ -122,6 +122,17 @@ db.run(`CREATE TABLE IF NOT EXISTS payment_cards (
     FOREIGN KEY (userId) REFERENCES users(id)
 )`);
 
+// Lezárási kódok tábla létrehozása
+db.run(`CREATE TABLE IF NOT EXISTS work_completion_codes (
+    id TEXT PRIMARY KEY,
+    workId TEXT NOT NULL,
+    completionCode TEXT NOT NULL,
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (workId) REFERENCES works(id)
+)`);
+
+console.log('✅ Work completion codes tábla inicializálva');
 console.log('✅ Payment cards tábla inicializálva');
 
 // ÚJ KÁRTYA HOZZÁADÁSA
@@ -3238,10 +3249,10 @@ app.put('/api/works/:workId/status', (req, res) => {
 
             // Ellenőrizzük, hogy a munka létezik-e
             db.get('SELECT * FROM works WHERE id = ?', [workId], (err, work) => {
-                if (err) {
-                    console.error('Database error:', err);
-                    return res.status(500).json({ message: 'Adatbázis hiba' });
-                }
+                        if (err) {
+                            console.error('❌ Adatbázis hiba:', err);
+                            return res.status(500).json({ message: 'Adatbázis hiba' });
+                        }
 
                 if (!work) {
                     return res.status(404).json({ message: 'Munka nem található' });
@@ -3287,7 +3298,223 @@ app.put('/api/works/:workId/status', (req, res) => {
     }
 });
 
+// DEBUG: Lezárási kódok megtekintése
+// DEBUG: Lezárási kódok megtekintése (módosított változat)
+app.get('/api/debug/completion-codes', (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
 
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            console.log('🔍 DEBUG - Token user ID:', decoded.id);
+
+            // MÓDOSÍTÁS: Bárki aki be van jelentkezve láthatja
+            // Összes munka lekérése lezárási kóddal
+            db.all(
+                `SELECT 
+                    w.id as workId,
+                    w.title as workTitle,
+                    w.statusText as workStatus,
+                    w.employerName,
+                    w.employerID,
+                    wc.completionCode,
+                    wc.createdAt as codeCreatedAt,
+                    wc.updatedAt as codeUpdatedAt
+                FROM works w
+                LEFT JOIN work_completion_codes wc ON w.id = wc.workId
+                ORDER BY wc.createdAt DESC`,
+                (err, rows) => {
+                    if (err) {
+                        console.error('Database error:', err);
+                        return res.status(500).json({ message: 'Adatbázis hiba' });
+                    }
+
+                    console.log('🔍 DEBUG - Összes lezárási kód:');
+                    rows.forEach(row => {
+                        console.log(`  - Munka: ${row.workTitle} (${row.workId})`);
+                        console.log(`    Státusz: ${row.workStatus}`);
+                        console.log(`    Lezárási kód: ${row.completionCode || 'NINCS'}`);
+                        console.log(`    Munkáltató ID: ${row.employerID}`);
+                        console.log(`    Létrehozva: ${row.codeCreatedAt}`);
+                        console.log(`    Frissítve: ${row.codeUpdatedAt}`);
+                        console.log('    ---');
+                    });
+
+                    res.status(200).json({
+                        completionCodes: rows,
+                        count: rows.length,
+                        userId: decoded.id
+                    });
+                }
+            );
+        });
+
+    } catch (error) {
+        console.error('Debug completion codes error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// LEZÁRÁSI KÓD MENTÉSE
+app.post('/api/works/:workId/completion-code', (req, res) => {
+    try {
+        const { workId } = req.params;
+        const { completionCode } = req.body;
+
+        console.log('🔐 Lezárási kód mentése:');
+        console.log('  - Munka ID:', workId);
+        console.log('  - Kód:', completionCode);
+
+        if (!completionCode) {
+            return res.status(400).json({ message: 'Hiányzó lezárási kód' });
+        }
+
+        // Ellenőrizzük, hogy a munka létezik-e
+        db.get('SELECT id FROM works WHERE id = ?', [workId], (err, work) => {
+            if (err) {
+                console.error('Database error:', err);
+                return res.status(500).json({ message: 'Adatbázis hiba' });
+            }
+
+            if (!work) {
+                return res.status(404).json({ message: 'Munka nem található' });
+            }
+
+            // Mentés vagy frissítés
+            const codeId = uuidv4();
+            db.run(
+                `INSERT OR REPLACE INTO work_completion_codes (id, workId, completionCode, updatedAt) 
+                 VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+                [codeId, workId, completionCode],
+                function(err) {
+                    if (err) {
+                        console.error('Save completion code error:', err);
+                        return res.status(500).json({ message: 'Hiba a kód mentésekor' });
+                    }
+
+                    console.log('✅ Lezárási kód sikeresen mentve');
+                    
+                    res.status(200).json({
+                        message: 'Lezárási kód sikeresen mentve',
+                        workId: workId,
+                        completionCode: completionCode
+                    });
+                }
+            );
+        });
+
+    } catch (error) {
+        console.error('Save completion code error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// server.js - ÚJ ENDPOINT
+app.put('/api/works/:workId/complete', (req, res) => {
+    try {
+        const { workId } = req.params;
+        const { employeeId } = req.body;
+        const token = req.headers.authorization?.split(' ')[1];
+
+        if (!token) {
+            return res.status(401).json({ message: 'Hozzáférés megtagadva' });
+        }
+
+        jwt.verify(token, JWT_SECRET, (err, decoded) => {
+            if (err) {
+                return res.status(401).json({ message: 'Érvénytelen token' });
+            }
+
+            // Ellenőrizzük, hogy a dolgozó a munkához van-e rendelve
+            db.get('SELECT employeeID FROM works WHERE id = ?', [workId], (err, work) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                if (!work) {
+                    return res.status(404).json({ message: 'Munka nem található' });
+                }
+
+                // Ellenőrizzük, hogy a jelenlegi user a hozzárendelt dolgozó-e
+                if (work.employeeID !== employeeId) {
+                    return res.status(403).json({
+                        message: 'Csak a hozzárendelt dolgozó fejezheti be a munkát'
+                    });
+                }
+
+                // Frissítjük a státuszt
+                db.run(
+                    'UPDATE works SET statusText = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+                    ['Befejezve', workId],
+                    function(err) {
+                        if (err) {
+                            console.error('Update work status error:', err);
+                            return res.status(500).json({ message: 'Hiba a munka frissítésekor' });
+                        }
+
+                        res.status(200).json({
+                            message: 'Munka sikeresen befejezve',
+                            workId: workId
+                        });
+
+                        console.log('✅ Munka befejezve dolgozó által:', { workId, employeeId });
+                    }
+                );
+            });
+        });
+
+    } catch (error) {
+        console.error('Complete work error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// LEZÁRÁSI KÓD LEKÉRÉSE
+app.get('/api/works/:workId/completion-code', (req, res) => {
+    try {
+        const { workId } = req.params;
+
+        console.log('🔍 Lezárási kód lekérése:', workId);
+
+        db.get(
+            'SELECT completionCode FROM work_completion_codes WHERE workId = ?',
+            [workId],
+            (err, row) => {
+                if (err) {
+                    console.error('Database error:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                if (!row) {
+                    console.log('ℹ️ Nincs lezárási kód ehhez a munkához:', workId);
+                    return res.status(404).json({
+                        message: 'Nincs lezárási kód ehhez a munkához',
+                        hasCode: false
+                    });
+                }
+
+                console.log('✅ Lezárási kód megtalálva:', row.completionCode);
+                
+                res.status(200).json({
+                    completionCode: row.completionCode,
+                    hasCode: true
+                });
+            }
+        );
+
+    } catch (error) {
+        console.error('Get completion code error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
 // MANUÁLIS KÓD ALAPJÁN MUNKA LEKÉRÉSE
 // server.js - Javított /api/works/code/:manualCode endpoint
 app.get('/api/works/code/:manualCode', (req, res) => {
@@ -3656,6 +3883,538 @@ app.put('/api/works/:id/status', (req, res) => {
 
     } catch (error) {
         console.error('Update work status error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+
+// =============================================================================
+// DEBUG ENDPOINTOK - KÖZVETLENÜL AZ app.listen ELŐTT
+// =============================================================================
+
+// NYILVÁNOS DEBUG: Lezárási kódok megtekintése (token nélkül)
+app.get('/api/public/debug/completion-codes', (req, res) => {
+    try {
+        console.log('🔍 NYILVÁNOS DEBUG - Lezárási kódok lekérése');
+
+        // Először ellenőrizzük, hogy létezik-e a tábla
+        db.all(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='work_completion_codes'",
+            (err, tables) => {
+                if (err) {
+                    console.error('❌ Tábla ellenőrzési hiba:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                if (tables.length === 0) {
+                    console.log('ℹ️ A work_completion_codes tábla még nem létezik');
+                    return res.status(200).json({
+                        message: 'A lezárási kódok táblája még nem létezik',
+                        tableExists: false,
+                        completionCodes: []
+                    });
+                }
+
+                console.log('✅ work_completion_codes tábla létezik');
+
+                // Összes munka lekérése lezárási kóddal
+                db.all(
+                    `SELECT 
+                        w.id as workId,
+                        w.title as workTitle,
+                        w.statusText as workStatus,
+                        w.employerName,
+                        w.employerID,
+                        wc.completionCode,
+                        wc.createdAt as codeCreatedAt,
+                        wc.updatedAt as codeUpdatedAt
+                    FROM works w
+                    LEFT JOIN work_completion_codes wc ON w.id = wc.workId
+                    ORDER BY wc.createdAt DESC`,
+                    (err, rows) => {
+                        if (err) {
+                            console.error('❌ Adatbázis hiba:', err);
+                            return res.status(500).json({ message: 'Adatbázis hiba' });
+                        }
+
+                        console.log('🔍 NYILVÁNOS DEBUG - Összes lezárási kód:');
+                        console.log(`📊 Összesen: ${rows.length} munka`);
+                        
+                        rows.forEach((row, index) => {
+                            console.log(`\n${index + 1}. MUNKA:`);
+                            console.log(`   ID: ${row.workId}`);
+                            console.log(`   Cím: ${row.workTitle}`);
+                            console.log(`   Státusz: ${row.workStatus}`);
+                            console.log(`   Munkáltató: ${row.employerName} (${row.employerID})`);
+                            console.log(`   Lezárási kód: ${row.completionCode || 'NINCS'}`);
+                            console.log(`   Kód létrehozva: ${row.codeCreatedAt}`);
+                        });
+
+                        res.status(200).json({
+                            message: 'Nyilvános debug adatok',
+                            tableExists: true,
+                            completionCodes: rows,
+                            totalCount: rows.length,
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                );
+            }
+        );
+
+    } catch (error) {
+        console.error('❌ Public debug error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// server.js - Módosítsd a /api/public/debug/works endpointot
+
+// NYILVÁNOS DEBUG: Összes munka listázása - HTML TÁBLÁZAT
+app.get('/api/public/debug/works', (req, res) => {
+    try {
+        console.log('🔍 NYILVÁNOS DEBUG - Összes munka lekérése');
+
+        db.all(
+            `SELECT 
+                id, title, employerName, employerID, statusText,
+                wage, paymentType, location, createdAt,
+                employeeID, description
+            FROM works 
+            ORDER BY createdAt DESC`,
+            (err, rows) => {
+                if (err) {
+                    console.error('❌ Adatbázis hiba:', err);
+                    return res.status(500).json({ message: 'Adatbázis hiba' });
+                }
+
+                // Helper function to format date
+                const formatDate = (dateString) => {
+                    if (!dateString) return 'N/A';
+                    try {
+                        const date = new Date(dateString);
+                        return date.toLocaleDateString('hu-HU') + ' ' + date.toLocaleTimeString('hu-HU');
+                    } catch (e) {
+                        return dateString;
+                    }
+                };
+
+                // Helper function for status class
+                const getStatusClass = (status) => {
+                    const statusMap = {
+                        'Publikálva': 'published',
+                        'Folyamatban': 'inprogress',
+                        'Befejezve': 'completed',
+                        'Ellenőrzésre vár': 'pending',
+                        'Nem kezdődött el': 'pending'
+                    };
+                    return statusMap[status] || 'pending';
+                };
+
+                // Helper function to escape HTML
+                const escapeHtml = (unsafe) => {
+                    if (!unsafe) return 'N/A';
+                    return unsafe.toString()
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                        .replace(/"/g, "&quot;")
+                        .replace(/'/g, "&#039;");
+                };
+
+                // HTML táblázat generálása
+                let html = `
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Munka Debug - SkillTrade</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 95%;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #2c3e50, #34495e);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 300;
+        }
+        
+        .header .stats {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .stat-card {
+            background: rgba(255,255,255,0.1);
+            padding: 15px 25px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            display: block;
+        }
+        
+        .stat-label {
+            font-size: 0.9em;
+            opacity: 0.8;
+        }
+        
+        .table-container {
+            overflow-x: auto;
+            padding: 20px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        
+        th {
+            background: #f8f9fa;
+            padding: 15px 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #2c3e50;
+            border-bottom: 2px solid #dee2e6;
+            position: sticky;
+            top: 0;
+        }
+        
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e9ecef;
+            vertical-align: top;
+        }
+        
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .id-cell {
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            color: #6c757d;
+        }
+        
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+        }
+        
+        .status-published { background: #d4edda; color: #155724; }
+        .status-inprogress { background: #fff3cd; color: #856404; }
+        .status-completed { background: #d1ecf1; color: #0c5460; }
+        .status-pending { background: #e2e3e5; color: #383d41; }
+        
+        .wage-cell {
+            font-weight: 600;
+            color: #28a745;
+        }
+        
+        .employer-cell {
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .description-cell {
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .timestamp {
+            font-size: 12px;
+            color: #6c757d;
+        }
+        
+        .copy-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            margin-left: 5px;
+        }
+        
+        .copy-btn:hover {
+            background: #0056b3;
+        }
+        
+        .filters {
+            padding: 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        .filter-group {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .filter-select {
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            background: white;
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 { font-size: 2em; }
+            .header .stats { gap: 15px; }
+            .stat-card { padding: 10px 15px; }
+            th, td { padding: 8px; font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 SkillTrade - Munka Debug</h1>
+            <p>Összes munka az adatbázisban</p>
+            <div class="stats">
+                <div class="stat-card">
+                    <span class="stat-number">${rows.length}</span>
+                    <span class="stat-label">Összes munka</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-number">${rows.filter(r => r.statusText === 'Publikálva').length}</span>
+                    <span class="stat-label">Publikálva</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-number">${rows.filter(r => r.statusText === 'Folyamatban').length}</span>
+                    <span class="stat-label">Folyamatban</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-number">${rows.filter(r => r.statusText === 'Befejezve').length}</span>
+                    <span class="stat-label">Befejezve</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="filters">
+            <div class="filter-group">
+                <select id="statusFilter" class="filter-select" onchange="filterTable()">
+                    <option value="">Összes státusz</option>
+                    <option value="Publikálva">Publikálva</option>
+                    <option value="Folyamatban">Folyamatban</option>
+                    <option value="Befejezve">Befejezve</option>
+                    <option value="Ellenőrzésre vár">Ellenőrzésre vár</option>
+                </select>
+                <select id="employerFilter" class="filter-select" onchange="filterTable()">
+                    <option value="">Összes munkáltató</option>
+                    ${[...new Set(rows.map(r => r.employerName))].map(name => 
+                        `<option value="${name}">${escapeHtml(name)}</option>`
+                    ).join('')}
+                </select>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <table id="worksTable">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Cím</th>
+                        <th>Státusz</th>
+                        <th>Bér</th>
+                        <th>Fizetés típus</th>
+                        <th>Munkáltató</th>
+                        <th>Helyszín</th>
+                        <th>Dolgozó ID</th>
+                        <th>Leírás</th>
+                        <th>Létrehozva</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map(row => `
+                        <tr>
+                            <td class="id-cell">
+                                ${row.id}
+                                <button class="copy-btn" onclick="copyToClipboard('${row.id}')">Copy</button>
+                            </td>
+                            <td>${escapeHtml(row.title || 'N/A')}</td>
+                            <td>
+                                <span class="status-badge status-${getStatusClass(row.statusText)}">
+                                    ${row.statusText || 'N/A'}
+                                </span>
+                            </td>
+                            <td class="wage-cell">${row.wage || 0} Ft</td>
+                            <td>${escapeHtml(row.paymentType || 'N/A')}</td>
+                            <td class="employer-cell" title="${escapeHtml(row.employerName || '')}">
+                                ${escapeHtml((row.employerName || 'N/A').substring(0, 20))}${(row.employerName || '').length > 20 ? '...' : ''}
+                            </td>
+                            <td>${escapeHtml(row.location || 'N/A')}</td>
+                            <td class="id-cell">
+                                ${row.employeeID ? row.employeeID.substring(0, 8) + '...' : 'Nincs'}
+                            </td>
+                            <td class="description-cell" title="${escapeHtml(row.description || '')}">
+                                ${escapeHtml((row.description || 'N/A').substring(0, 30))}${(row.description || '').length > 30 ? '...' : ''}
+                            </td>
+                            <td class="timestamp">${formatDate(row.createdAt)}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('ID másolva: ' + text);
+            });
+        }
+        
+        function filterTable() {
+            const statusFilter = document.getElementById('statusFilter').value.toLowerCase();
+            const employerFilter = document.getElementById('employerFilter').value.toLowerCase();
+            const table = document.getElementById('worksTable');
+            const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
+            
+            for (let row of rows) {
+                const status = row.cells[2].textContent.toLowerCase();
+                const employer = row.cells[5].textContent.toLowerCase();
+                
+                const statusMatch = !statusFilter || status.includes(statusFilter);
+                const employerMatch = !employerFilter || employer.includes(employerFilter);
+                
+                row.style.display = statusMatch && employerMatch ? '' : 'none';
+            }
+        }
+        
+        // Auto-refresh every 30 seconds
+        setTimeout(() => {
+            location.reload();
+        }, 30000);
+    </script>
+</body>
+</html>
+                `;
+
+                res.setHeader('Content-Type', 'text/html; charset=utf-8');
+                res.send(html);
+            }
+        );
+
+    } catch (error) {
+        console.error('❌ Public debug works error:', error);
+        res.status(500).json({ message: 'Szerver hiba' });
+    }
+});
+
+// MUNKA LEZÁRÁSI KÓDJÁNAK KÉZI LÉTREHOZÁSA (teszteléshez)
+app.post('/api/public/debug/create-completion-code', (req, res) => {
+    try {
+        const { workId, completionCode } = req.body;
+
+        console.log('🔐 DEBUG - Kézi lezárási kód létrehozása:');
+        console.log('  - Munka ID:', workId);
+        console.log('  - Kód:', completionCode);
+
+        if (!workId || !completionCode) {
+            return res.status(400).json({
+                message: 'Munka ID és lezárási kód megadása kötelező'
+            });
+        }
+
+        // Ellenőrizzük, hogy a munka létezik-e
+        db.get('SELECT id FROM works WHERE id = ?', [workId], (err, work) => {
+            if (err) {
+                console.error('❌ Adatbázis hiba:', err);
+                return res.status(500).json({ message: 'Adatbázis hiba' });
+            }
+
+            if (!work) {
+                return res.status(404).json({ message: 'Munka nem található' });
+            }
+
+            // Tábla létrehozása, ha nem létezik
+            db.run(`CREATE TABLE IF NOT EXISTS work_completion_codes (
+                id TEXT PRIMARY KEY,
+                workId TEXT NOT NULL,
+                completionCode TEXT NOT NULL,
+                createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (workId) REFERENCES works(id)
+            )`, (err) => {
+                if (err) {
+                    console.error('❌ Tábla létrehozási hiba:', err);
+                    return res.status(500).json({ message: 'Hiba a tábla létrehozásakor' });
+                }
+
+                console.log('✅ work_completion_codes tábla létrehozva/ellenőrizve');
+
+                // Kód mentése
+                const codeId = uuidv4();
+                db.run(
+                    `INSERT OR REPLACE INTO work_completion_codes (id, workId, completionCode) 
+                     VALUES (?, ?, ?)`,
+                    [codeId, workId, completionCode],
+                    function(err) {
+                        if (err) {
+                            console.error('❌ Kód mentési hiba:', err);
+                            return res.status(500).json({ message: 'Hiba a kód mentésekor' });
+                        }
+
+                        console.log('✅ Lezárási kód sikeresen mentve');
+                        
+                        res.status(200).json({
+                            message: 'Lezárási kód sikeresen létrehozva',
+                            workId: workId,
+                            completionCode: completionCode,
+                            codeId: codeId
+                        });
+                    }
+                );
+            });
+        });
+
+    } catch (error) {
+        console.error('❌ Create completion code error:', error);
         res.status(500).json({ message: 'Szerver hiba' });
     }
 });
